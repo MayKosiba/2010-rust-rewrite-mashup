@@ -588,7 +588,11 @@ impl CreatureSpawns {
         }
         let darkening = if context.thundering { 10 } else { level.sky_darken() };
         let brightness = level.raw_brightness(pos, darkening);
-        brightness <= level.random().next_i32_bound(self.monster_light_test_max + 1)
+        // `ConstantInt.sample` draws nothing; `UniformInt.sample` is
+        // `randomBetweenInclusive`.
+        let (min, max) = self.monster_light_test;
+        let limit = if min == max { min } else { level.random().next_i32_bound(max - min + 1) + min };
+        brightness <= limit
     }
 
     /// `Bat.checkBatSpawnRules`.

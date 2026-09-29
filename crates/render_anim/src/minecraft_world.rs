@@ -1150,7 +1150,10 @@ fn update(
             yaw: mc_yaw,
             pitch: ps.viewangles[0],
         };
-        let bright_outside = world.environment.sky_light_level() > 11.0;
+        // `Level.isDay`: never in a dimension with fixed time (the Nether
+        // and the End), however bright its sky; endermen there would teleport
+        // from the "sun" until they found cover under the island.
+        let bright_outside = world.dimension == Dimension::Overworld && world.environment.sky_light_level() > 11.0;
         let ticks_before = entities.client_ticks();
         let (changes, hits) = entities.tick(dt, day.ticks as i64, bright_outside, &player);
         let mob_ticks = (entities.client_ticks() - ticks_before) as u32;

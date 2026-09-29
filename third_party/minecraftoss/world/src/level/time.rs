@@ -216,7 +216,16 @@ impl Level<'_> {
 
     /// `Level.updateSkyBrightness`.
     pub fn update_sky_brightness(&mut self) {
-        let level = self.environment_value("gameplay/sky_light_level", 0);
+        // The End's sky lights nothing in play: its skylight (new in 26.x)
+        // is only seen, with `visual/sky_light_factor` 0. Read at the
+        // default 15, it made the island's open top too bright for any
+        // monster to spawn or want to stand on, so endermen only appeared
+        // in hollows under it. Its sky darkens fully, as when it had none.
+        let level = if self.dimension.as_deref() == Some("minecraft:the_end") {
+            0.0
+        } else {
+            self.environment_value("gameplay/sky_light_level", 0)
+        };
         if let Some(sky) = &mut self.sky {
             sky.sky_darken = (15.0 - level) as i32;
         }

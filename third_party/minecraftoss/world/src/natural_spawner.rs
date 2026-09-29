@@ -334,7 +334,9 @@ pub struct CreatureSpawns {
     /// `DimensionType.monsterSpawnBlockLightLimit` and the upper bound of
     /// the uniform `monsterSpawnLightTest` (lower bound 0).
     monster_block_light_limit: i32,
-    monster_light_test_max: i32,
+    /// `DimensionType.monsterSpawnLightTest`'s range, inclusive: equal ends
+    /// for a constant (the End's 15), which draws no random.
+    monster_light_test: (i32, i32),
     /// `#minecraft:allows_surface_slime_spawns`.
     surface_slimes: Option<TagId>,
     /// `#minecraft:bats_spawnable_on`.
@@ -436,7 +438,13 @@ impl CreatureSpawns {
         let dimension = pack.read_json("dimension_type", &minecraftoss_core::Identifier::parse(dimension_type)?)?;
         // `DimensionType.monsterSpawnLightTest`: a constant or uniform int.
         let light_test = &dimension["monster_spawn_light_level"];
-        let monster_light_test_max = light_test.as_i64().map(|v| v as i32).or_else(|| light_test["max_inclusive"].as_i64().map(|v| v as i32)).unwrap_or(7);
+        let monster_light_test = match light_test.as_i64() {
+            Some(constant) => (constant as i32, constant as i32),
+            None => (
+                light_test["min_inclusive"].as_i64().unwrap_or(0) as i32,
+                light_test["max_inclusive"].as_i64().unwrap_or(7) as i32,
+            ),
+        };
         Ok(Self {
             registries: registries_arc.clone(),
             creatures,
@@ -444,7 +452,7 @@ impl CreatureSpawns {
             costs,
             reduced_water_ambient: registries.biome_tags.id("minecraft:reduced_water_ambient_spawns"),
             monster_block_light_limit: dimension["monster_spawn_block_light_limit"].as_i64().unwrap_or(0) as i32,
-            monster_light_test_max,
+            monster_light_test,
             surface_slimes: registries.biome_tags.id("minecraft:allows_surface_slime_spawns"),
             bats_spawnable_on: registries.block_tags.id("minecraft:bats_spawnable_on"),
             probability,
