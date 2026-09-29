@@ -372,7 +372,23 @@ fn build_internal<S: Scene>(scene: &S, packs: &PackStack, preload_blocks: bool) 
     let mut models: HashMap<String, Vec<(ResolvedModel, u32)>> = HashMap::new();
     let mut textures = BTreeMap::<ResourceId, ()>::new();
     // A broken chest can remain as a dropped item after its block mesh is gone.
-    textures.insert(ResourceId::parse("minecraft:entity/chest/normal")?, ());
+    // Block entities this world draws from entity sheets: the end portal's
+    // stars, the dragon, the end crystals and the dragon's fireball.
+    for id in [
+        "entity/end_portal/end_portal",
+        "entity/enderdragon/dragon",
+        "entity/enderdragon/dragon_eyes",
+        "entity/enderdragon/dragon_fireball",
+        "entity/end_crystal/end_crystal",
+        "entity/end_crystal/end_crystal_beam",
+    ] {
+        textures.insert(ResourceId::parse(&format!("minecraft:{id}"))?, ());
+    }
+    for sheet in ["normal", "trapped"] {
+        for half in ["", "_left", "_right"] {
+            textures.insert(ResourceId::parse(&format!("minecraft:entity/chest/{sheet}{half}"))?, ());
+        }
+    }
     textures.insert(ResourceId::parse("minecraft:entity/bat/bat")?, ());
     textures.insert(ResourceId::parse("minecraft:entity/zombie/zombie")?, ());
     textures.insert(ResourceId::parse("minecraft:entity/player/wide/steve")?, ());
@@ -1792,6 +1808,44 @@ pub(crate) fn finish_mesh(mut mesh: ChunkMesh, transparent_indices: Vec<u32>) ->
 /// the block is not a fluid; `hidden_by(neighbor)` is whether the block at a
 /// neighboring position hides a cullable face toward it.
 #[allow(clippy::too_many_arguments)]
+/// An end portal's surface. Vanilla draws it with the end portal shader
+/// (layered, parallaxed star fields) and the block has no model; here its
+/// top, 0.75 up as `TheEndPortalRenderer` puts it, shows the star sheet.
+fn append_end_portal<S: Scene>(
+    _scene: &S,
+    (x, y, z): BlockPos,
+    atlas: &Atlas,
+    light: &SkyLight,
+    mesh: &mut ChunkMesh,
+) -> Result<()> {
+    let texture = ResourceId::parse("minecraft:entity/end_portal/end_portal")?;
+    if !atlas.contains(&texture) {
+        return Ok(());
+    }
+    let [u0, v0, u1, v1] = atlas.region(&texture);
+    let top = y as f32 + 0.75;
+    let (fx, fz) = (x as f32, z as f32);
+    let corners = [[fx, top, fz], [fx, top, fz + 1.0], [fx + 1.0, top, fz + 1.0], [fx + 1.0, top, fz]];
+    let uv = [[u0, v0], [u0, v1], [u1, v1], [u1, v0]];
+    let start = mesh.vertices.len() as u32;
+    for (corner, uv) in corners.into_iter().zip(uv) {
+        mesh.vertices.push(Vertex {
+            position: corner,
+            uv,
+            color: [1.0, 1.0, 1.0, 1.0],
+            // Full brightness, as the portal's shader ignores light.
+            sky_light: 15.0,
+            block_light: 15.0,
+        });
+    }
+    let _ = light;
+    mesh.indices.extend_from_slice(&[start, start + 1, start + 2, start, start + 2, start + 3]);
+    // Its underside too, seen from below.
+    mesh.indices.extend_from_slice(&[start, start + 2, start + 1, start, start + 3, start + 2]);
+    mesh.faces += 2;
+    Ok(())
+}
+
 pub(crate) fn append_block<'m, S: Scene>(
     scene: &S,
     (x, y, z): BlockPos,
@@ -1804,9 +1858,11 @@ pub(crate) fn append_block<'m, S: Scene>(
     mesh: &mut ChunkMesh,
     transparent_indices: &mut Vec<u32>,
 ) -> Result<()> {
-    if block.id.path == "chest" {
-        // Chest block entities have a separately posed lid/lock.
-        return Ok(());
+    // Chests draw their closed `ChestModel` here: nothing else draws the
+    // block entity, and a skipped chest was invisible.
+    let chest = crate::model::is_chest(&block.id.path);
+    if block.id.path == "end_portal" {
+        return append_end_portal(scene, (x, y, z), atlas, light, mesh);
     }
     if matches!(block.id.path.as_str(), "water" | "lava") {
         return append_fluid(
@@ -1834,7 +1890,9 @@ pub(crate) fn append_block<'m, S: Scene>(
             let corners = element_corners(element, &face.direction)?;
             let dir = quad_direction(element, &face.direction, &corners)?;
             let delta = direction(dir)?;
-            let [u0, v0, u1, v1] = atlas.region(&face.texture);
+            // Chest UVs address single pixels of the entity sheet: the exact
+            // span, as `block_preview` takes it.
+            let [u0, v0, u1, v1] = if chest { atlas.region_exact(&face.texture) } else { atlas.region(&face.texture) };
             let [a, b, c, d] = face.uv;
             let uv = [
                 [u0 + (u1 - u0) * a, v0 + (v1 - v0) * b],
@@ -1842,11 +1900,15 @@ pub(crate) fn append_block<'m, S: Scene>(
                 [u0 + (u1 - u0) * c, v0 + (v1 - v0) * d],
                 [u0 + (u1 - u0) * c, v0 + (v1 - v0) * b],
             ];
-            let shade = match element.shade_direction_override.as_deref().unwrap_or(dir) {
-                "up" => 1.0,
-                "down" => 0.5,
-                "north" | "south" => 0.8,
-                _ => 0.6,
+            let shade = if chest {
+                level_item_shade(face_normal(dir)?)
+            } else {
+                match element.shade_direction_override.as_deref().unwrap_or(dir) {
+                    "up" => 1.0,
+                    "down" => 0.5,
+                    "north" | "south" => 0.8,
+                    _ => 0.6,
+                }
             };
             let biome = *biome.get_or_insert_with(|| scene.biome_at((x, y, z)));
             let tint = block_face_tint(block, face.tint, biome, tint_source);
@@ -1856,7 +1918,10 @@ pub(crate) fn append_block<'m, S: Scene>(
             // culled quad is lit from its cullface's neighbour, another from
             // the neighbour it faces only when it lies on that side
             // (`faceCubic`), else from its own block.
-            let light_pos = if face.cull {
+            // ChestRenderer lights every part from the block entity's position.
+            let light_pos = if chest {
+                (x, y, z)
+            } else if face.cull {
                 (x + cull_delta.0, y + cull_delta.1, z + cull_delta.2)
             } else if face_cubic(dir, &corners) {
                 (x + delta.0, y + delta.1, z + delta.2)
@@ -2263,7 +2328,7 @@ pub fn block_preview<S: Scene>(
                 }
             }
             let corners = element_corners(element, &face.direction)?;
-            let [u0, v0, u1, v1] = if block.id.path == "chest" {
+            let [u0, v0, u1, v1] = if crate::model::is_chest(&block.id.path) {
                 // Chest ModelPart UVs address individual pixels in a 64x64
                 // entity sheet. The terrain atlas' half-texel tile inset
                 // distorts one-pixel lock faces and can sample alpha beside
@@ -2279,7 +2344,7 @@ pub fn block_preview<S: Scene>(
                 [u0 + (u1 - u0) * c, v0 + (v1 - v0) * d],
                 [u0 + (u1 - u0) * c, v0 + (v1 - v0) * b],
             ];
-            let shade = if block.id.path == "chest" {
+            let shade = if crate::model::is_chest(&block.id.path) {
                 level_item_shade(face_normal(dir)?)
             } else {
                 match element.shade_direction_override.as_deref().unwrap_or(dir) {

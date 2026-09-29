@@ -298,8 +298,14 @@ fn generated_item_model(pack: &PackStack, id: &ResourceId, model: &Value) -> Res
     Ok(ResolvedModel { elements })
 }
 
+/// Chests drawn from `ChestModel` (a block entity in vanilla), not a block
+/// model.
+pub fn is_chest(path: &str) -> bool {
+    matches!(path, "chest" | "trapped_chest")
+}
+
 pub fn resolve_block(pack: &PackStack, block: &Block) -> Result<ResolvedModel> {
-    if block.id.path == "chest" {
+    if is_chest(&block.id.path) {
         return closed_chest_model(block);
     }
     let state = pack
@@ -337,7 +343,7 @@ pub fn resolve_block_variants(
     pack: &PackStack,
     block: &Block,
 ) -> Result<Vec<(ResolvedModel, u32)>> {
-    if block.id.path == "chest" {
+    if is_chest(&block.id.path) {
         return Ok(vec![(closed_chest_model(block)?, 1)]);
     }
     let state = pack
@@ -376,16 +382,17 @@ pub fn resolve_block_variants(
 /// Closed single chest from 26.3 ChestModel.createSingleBodyLayer. Vanilla
 /// uses a block-entity renderer for this model; this static mesh covers its
 /// closed pose until opening animation is represented in the world pass.
-fn closed_chest_model(block: &Block) -> Result<ResolvedModel> {
+pub(crate) fn closed_chest_model(block: &Block) -> Result<ResolvedModel> {
     let chest_type = block
         .properties
         .get("type")
         .map(String::as_str)
         .unwrap_or("single");
-    let texture = ResourceId::parse(match chest_type {
-        "left" => "minecraft:entity/chest/normal_left",
-        "right" => "minecraft:entity/chest/normal_right",
-        _ => "minecraft:entity/chest/normal",
+    let sheet = if block.id.path == "trapped_chest" { "trapped" } else { "normal" };
+    let texture = ResourceId::parse(&match chest_type {
+        "left" => format!("minecraft:entity/chest/{sheet}_left"),
+        "right" => format!("minecraft:entity/chest/{sheet}_right"),
+        _ => format!("minecraft:entity/chest/{sheet}"),
     })?;
     let omitted_side = match chest_type {
         "left" => Some("west"),

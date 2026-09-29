@@ -73,6 +73,8 @@ pub(crate) struct Entities {
 const LOOT_TOOL: &str = "minecraft:diamond_pickaxe";
 /// TNT's power: a blast drops each block's loot one time in this many.
 const BLAST_POWER: f32 = 4.0;
+/// The first ID of items the client spawns, far above the server's.
+const CLIENT_ITEM_IDS: u32 = 1 << 30;
 
 /// The mobs drawn this frame: entity models (cut out, back-face culled,
 /// translucent) and their shadows, in `mesh::Vertex`s; and what goes with
@@ -97,8 +99,8 @@ pub(crate) struct PlayerView {
 }
 
 impl Entities {
-    pub(crate) fn new(stream: &TerrainStream, seed: i64) -> Self {
-        let sim = ServerSim::new(stream.world_gen(), stream.states.clone(), "minecraft:overworld");
+    pub(crate) fn new(stream: &TerrainStream, seed: i64, dimension_type: &str) -> Self {
+        let sim = ServerSim::new(stream.world_gen(), stream.states.clone(), dimension_type);
         let mut server = ServerHandle::spawn(sim);
         // Mob and block loot and the recipes (stack sizes), from the game's
         // data JAR when MinecraftOSS has one.
@@ -133,7 +135,10 @@ impl Entities {
             ticks: 0,
             inventory,
             selected: 0,
-            world_items: WorldItems::default(),
+            // Client drops are numbered apart from the server's entity IDs:
+            // a drop whose ID matched a server item was taken for that item,
+            // never handed over, and lost.
+            world_items: WorldItems::default().with_first_entity_id(CLIENT_ITEM_IDS),
             server_item_ids: HashSet::new(),
             server_handed: HashMap::new(),
             server_picked: Vec::new(),
@@ -157,6 +162,19 @@ impl Entities {
 
     /// Block loot for what the weapons broke, dropped as vanilla drops it
     /// (`Block.popResource`); a blast keeps each drop one time in four.
+    /// `useWithoutItem` on a block the level acts on (doors, gates, levers,
+    /// buttons); false for any other block.
+    pub(crate) fn use_block(&mut self, scene: &HandcraftedScene, pos: (i32, i32, i32), facing: &'static str) -> bool {
+        self.server.use_block(scene, pos, facing)
+    }
+
+    /// A broken container's contents, spilled where it stood.
+    pub(crate) fn spill(&mut self, pos: (i32, i32, i32), stacks: Vec<ItemStack>) {
+        for stack in stacks {
+            self.world_items.spawn_block_drop(stack, pos);
+        }
+    }
+
     pub(crate) fn drop_blocks(&mut self, broken: &[((i32, i32, i32), Block, bool)]) {
         let Some(loot) = self.loot.as_ref() else {
             return;
@@ -372,7 +390,22 @@ impl Entities {
             }
             self.portal.tick();
             if self.ticks % 600 == 0 {
-                diag::info!(World, "Minecraft mobs: {} tracked", self.boxes().len());
+                // By kind, with the nearest of each, to see where they are.
+                const KINDS: [&str; 16] = [
+                    "bat", "zombie", "skeleton", "creeper", "spider", "slime", "enderman", "witch",
+                    "iron_golem", "wolf", "villager", "cow", "mooshroom", "sheep", "pig", "chicken",
+                ];
+                let boxes = self.boxes();
+                let mut kinds: std::collections::BTreeMap<&str, (usize, f64)> = Default::default();
+                for (key, b) in &boxes {
+                    let name = KINDS.get((key >> 56) as usize).copied().unwrap_or("other");
+                    let centre = DVec3::new((b[0] + b[3]) * 0.5, b[1], (b[2] + b[5]) * 0.5);
+                    let entry = kinds.entry(name).or_insert((0, f64::MAX));
+                    entry.0 += 1;
+                    entry.1 = entry.1.min(centre.distance(DVec3::from_array(player.feet)));
+                }
+                let summary: Vec<String> = kinds.iter().map(|(k, (n, d))| format!("{k} {n} (nearest {d:.0})")).collect();
+                diag::info!(World, "Minecraft mobs: {} tracked: {}", boxes.len(), summary.join(", "));
             }
             let feet = DVec3::from_array(player.feet);
             let center = ((feet.x.floor() as i32) >> 4, (feet.z.floor() as i32) >> 4);

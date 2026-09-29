@@ -91,7 +91,9 @@ impl BlockStates {
                 _ => u32::MAX,
             });
             fluid.push(matches!(path, "water" | "lava"));
-            chest.push(path == "chest");
+            // Drawn by `append_block` rather than baked quads: chests and
+            // the end portal's surface have no block model.
+            chest.push(crate::model::is_chest(path) || path == "end_portal");
             waterlogged.push(block.as_ref().is_some_and(|b| b.properties.get("waterlogged").is_some_and(|value| value == "true")));
             tint_kind.push(block.as_ref().map_or(mesh::TintKind::Other, mesh::TintKind::of));
             fluid_cell.push(block.as_ref().and_then(crate::fluid::FluidCell::from_block));
@@ -1252,6 +1254,22 @@ impl TerrainStream {
 
     /// Hands edited positions to the integrated server, whose chunks are
     /// the ones saved: each takes the block the scene now shows there.
+    /// A chunk generated (or loaded from storage) now, with its edits.
+    pub fn load_now(&mut self, pos: minecraftoss_core::ChunkPos) -> Arc<Chunk> {
+        self.server.load_now(pos)
+    }
+
+    /// Edits to chunks loaded with `load_now`, before the scene has them.
+    pub fn set_blocks(&mut self, edits: &[(minecraftoss_core::BlockPos, minecraftoss_core::BlockStateId)]) {
+        self.server.set_blocks(edits);
+    }
+
+    /// Saves every chunk in memory to the world directory, as when a
+    /// player leaves the dimension.
+    pub fn save_all(&mut self) {
+        self.server.save_all();
+    }
+
     pub fn record_edits(&mut self, scene: &HandcraftedScene, positions: &[BlockPos]) {
         let edits: Vec<(minecraftoss_core::BlockPos, minecraftoss_core::BlockStateId)> = positions
             .iter()

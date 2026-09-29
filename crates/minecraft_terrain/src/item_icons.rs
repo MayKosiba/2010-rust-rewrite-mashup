@@ -10,6 +10,9 @@ use std::collections::HashMap;
 /// its flat texture.
 pub fn item_icon(packs: &PackStack, key: &str, icon_size: usize) -> Result<Option<RgbaImage>> {
     let id = ResourceId::parse(key)?;
+    if crate::model::is_chest(&id.path) {
+        return crate::item_icon::chest_icon(packs, &crate::scene::Block::new(key), icon_size);
+    }
     let definition = packs.item_definition(&id)?;
     let model = definition.as_ref().and_then(|value| item_model_reference(&value["model"]));
     let tints = definition

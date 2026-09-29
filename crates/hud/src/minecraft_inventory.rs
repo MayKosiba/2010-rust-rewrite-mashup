@@ -9,7 +9,7 @@ use asset_game::{FontDef, MenuCatalog};
 use assets::{PreparedLocalizedStrings, PreparedWeapons};
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
-use frame::{McClick, McSlot, McStack, MinecraftUi};
+use frame::{McClick, McScreen, McSlot, McStack, MinecraftUi};
 use hud_iw4::{normalized_text_scale as r_normalized_text_scale, ui_text_height};
 
 use crate::chrome::ui_text_width;
@@ -49,23 +49,54 @@ const PANEL_W: f32 = 236.0;
 const PANEL_H: f32 = 238.0;
 const HEADER_H: f32 = 20.0;
 const GRID_X: f32 = -98.0;
+/// The crafting table's grid, top left.
+const WB_X: f32 = 14.0;
+const WB_Y: f32 = -90.0;
+/// The furnace's input and fuel column.
+const FURNACE_X: f32 = 34.0;
+/// The chest's top row.
+const CHEST_Y: f32 = -94.0;
 /// The character window.
 const BOX: [f32; 4] = [-73.0, -100.0, 62.0, 86.0];
 
 /// Where each slot of the screen sits (x, y, size).
-fn layout() -> Vec<(McSlot, f32, f32, f32)> {
+fn layout(screen: McScreen) -> Vec<(McSlot, f32, f32, f32)> {
     let mut out = Vec::new();
-    // Armor, head to feet down the left (slots 39..36).
-    for (row, slot) in [39usize, 38, 37, 36].into_iter().enumerate() {
-        out.push((McSlot::Inventory(slot), GRID_X, -100.0 + row as f32 * P, S));
+    if screen != McScreen::Chest {
+        // Armor, head to feet down the left (slots 39..36).
+        for (row, slot) in [39usize, 38, 37, 36].into_iter().enumerate() {
+            out.push((McSlot::Inventory(slot), GRID_X, -100.0 + row as f32 * P, S));
+        }
+        // The offhand beside the character window.
+        out.push((McSlot::Inventory(40), BOX[0] + BOX[2] + 3.0, -34.0, S));
     }
-    // The offhand beside the character window.
-    out.push((McSlot::Inventory(40), BOX[0] + BOX[2] + 3.0, -34.0, S));
-    // The 2x2 crafting grid and its result.
-    for i in 0..4 {
-        out.push((McSlot::Crafting(i), 22.0 + (i % 2) as f32 * P, -86.0 + (i / 2) as f32 * P, S));
+    match screen {
+        McScreen::Inventory => {
+            // The 2x2 crafting grid and its result.
+            for i in 0..4 {
+                out.push((McSlot::Crafting(i), 22.0 + (i % 2) as f32 * P, -86.0 + (i / 2) as f32 * P, S));
+            }
+            out.push((McSlot::Result, 88.0, -77.0, 24.0));
+        }
+        McScreen::Workbench => {
+            // The crafting table's 3x3 grid and its result.
+            for i in 0..9 {
+                out.push((McSlot::Workbench(i), WB_X + (i % 3) as f32 * P, WB_Y + (i / 3) as f32 * P, S));
+            }
+            out.push((McSlot::WorkbenchResult, 92.0, WB_Y + P * 1.5 - 1.0 - 11.0, 22.0));
+        }
+        McScreen::Furnace => {
+            // Input over the flame over fuel, and the output.
+            out.push((McSlot::Furnace(0), FURNACE_X, -90.0, S));
+            out.push((McSlot::Furnace(1), FURNACE_X, -46.0, S));
+            out.push((McSlot::Furnace(2), 88.0, -69.0, 24.0));
+        }
+        McScreen::Chest => {
+            for i in 0..27 {
+                out.push((McSlot::Chest(i), GRID_X + (i % 9) as f32 * P, CHEST_Y + (i / 9) as f32 * P, S));
+            }
+        }
     }
-    out.push((McSlot::Result, 88.0, -77.0, 24.0));
     // The backpack, three rows of nine, then the hotbar.
     for row in 0..3 {
         for col in 0..9 {
@@ -250,6 +281,10 @@ fn stack_at<'a>(ui: &'a MinecraftUi, slot: McSlot) -> Option<&'a McStack> {
         McSlot::Inventory(i) => ui.slots.get(i)?.as_ref(),
         McSlot::Crafting(i) => ui.crafting.get(i)?.as_ref(),
         McSlot::Result => ui.result.as_ref(),
+        McSlot::Workbench(i) => ui.workbench.get(i)?.as_ref(),
+        McSlot::WorkbenchResult => ui.workbench_result.as_ref(),
+        McSlot::Furnace(i) => ui.furnace.get(i)?.as_ref(),
+        McSlot::Chest(i) => ui.chest.get(i)?.as_ref(),
     }
 }
 
@@ -307,6 +342,9 @@ pub(crate) fn update_minecraft_hud(
         ui.clicks.push(McClick::Close);
         input.drag = None;
     }
+    if !ui.inventory_open {
+        ui.screen = McScreen::Inventory;
+    }
     let digits = [
         KeyCode::Digit1,
         KeyCode::Digit2,
@@ -352,20 +390,28 @@ pub(crate) fn update_minecraft_hud(
         }
         canvas.k = 1.15;
         draw_hotbar(&mut canvas, &mut ui, weapons, strings, &mut gaps, time.delta_secs());
+        if let Some((name, health)) = ui.boss.clone() {
+            draw_boss_bar(&mut canvas, &name, health);
+        }
         ui.character_box = None;
     } else {
         for _ in wheel.read() {}
-        let hovered = mouse.and_then(|m| hovered_slot(&surface, m));
+        let hovered = mouse.and_then(|m| hovered_slot(&surface, m, ui.screen));
         let inside = mouse.is_some_and(|m| over_panel(&surface, m));
         handle_clicks(&mut ui, &mut input, &buttons, hovered, inside, shift, digit, now);
         canvas.k = K;
         draw_inventory(&mut canvas, &mut ui, weapons, strings, &mut gaps, hovered, mouse);
-        // Where the character stands, and the mouse it follows.
+        // Where the character stands, and the mouse it follows; a chest's
+        // screen has no character.
         let b = surface.apply_rect(BOX[0] * K, BOX[1] * K, BOX[2] * K, BOX[3] * K, CENTER, CENTER);
-        let centre = [b.x + b.w * 0.5, b.y + b.h * 0.36];
-        ui.character_box = Some([b.x + b.w * 0.5, b.y + b.h * 0.5, b.w, b.h]);
-        if let Some(m) = mouse {
-            ui.gaze = [(m.x - centre[0]) / (b.h * 0.5), (m.y - centre[1]) / (b.h * 0.5)];
+        if ui.screen == McScreen::Chest {
+            ui.character_box = None;
+        } else {
+            let centre = [b.x + b.w * 0.5, b.y + b.h * 0.36];
+            ui.character_box = Some([b.x + b.w * 0.5, b.y + b.h * 0.5, b.w, b.h]);
+            if let Some(m) = mouse {
+                ui.gaze = [(m.x - centre[0]) / (b.h * 0.5), (m.y - centre[1]) / (b.h * 0.5)];
+            }
         }
     }
 
@@ -378,8 +424,8 @@ pub(crate) fn update_minecraft_hud(
     pass.minecraft = if quads.is_empty() { TessJob::Hide } else { TessJob::Quads(quads) };
 }
 
-fn hovered_slot(surface: &crate::surface::Hud2dSurface, mouse: Vec2) -> Option<McSlot> {
-    layout().into_iter().find_map(|(slot, x, y, size)| {
+fn hovered_slot(surface: &crate::surface::Hud2dSurface, mouse: Vec2, screen: McScreen) -> Option<McSlot> {
+    layout(screen).into_iter().find_map(|(slot, x, y, size)| {
         let r = surface.apply_rect(x * K, y * K, size * K, size * K, CENTER, CENTER);
         (mouse.x >= r.x && mouse.x < r.x + r.w && mouse.y >= r.y && mouse.y < r.y + r.h).then_some(slot)
     })
@@ -456,6 +502,21 @@ fn handle_clicks(
     }
 }
 
+/// A boss's bar across the top of the screen (`BossHealthOverlay`), in the
+/// inventory's MW2 chrome: its name over a rust-orange bar.
+fn draw_boss_bar(canvas: &mut Canvas<'_>, name: &str, health: f32) {
+    let align = (CENTER, 1);
+    let (w, h, y) = (182.0, 5.0, 14.0);
+    let x = -w * 0.5;
+    let px = 7.0;
+    let text_w = canvas.fonts.get(FONT_TITLE).map_or(0.0, |def| ui_text_width(def, name, px / ui_text_height(1.0)));
+    canvas.text(FONT_TITLE, -text_w * 0.5, y - px - 3.0, px, HIGHLIGHT, name, false, align);
+    canvas.fill(x - 1.0, y - 1.0, w + 2.0, h + 2.0, [0.04, 0.03, 0.02, 0.75], align);
+    canvas.frame(x - 1.0, y - 1.0, w + 2.0, h + 2.0, EDGE, align);
+    canvas.fill(x, y, w * health.clamp(0.0, 1.0), h, ACCENT, align);
+    canvas.brackets(x - 3.0, y - 3.0, w + 6.0, h + 6.0, 4.0, [ACCENT[0], ACCENT[1], ACCENT[2], 0.9], align);
+}
+
 /// The hotbar along the bottom of the screen, between MW2's score and ammo.
 fn draw_hotbar(
     canvas: &mut Canvas<'_>,
@@ -524,7 +585,9 @@ fn draw_inventory(
     let c = (CENTER, CENTER);
     // Dim the world around the panel; the character window stays clear.
     let dim = [0.0, 0.0, 0.0, 0.55];
-    let [bx, by, bw, bh] = BOX;
+    let chest = ui.screen == McScreen::Chest;
+    // A chest's screen has no character window: its box is empty.
+    let [bx, by, bw, bh] = if chest { [0.0, -100.0, 0.0, 0.0] } else { BOX };
     let around = [
         (-2000.0, -2000.0, 4000.0, 2000.0 + by),
         (-2000.0, by + bh, 4000.0, 2000.0),
@@ -549,29 +612,68 @@ fn draw_inventory(
     canvas.quad(PANEL_X, PANEL_Y, PANEL_W, HEADER_H, [ACCENT[0], ACCENT[1], ACCENT[2], 0.22], "gradient_fadein_fadebottom", [0.0, 0.0, 1.0, 1.0], c);
     canvas.fill(PANEL_X, PANEL_Y + HEADER_H - 1.0, PANEL_W, 1.0, [ACCENT[0], ACCENT[1], ACCENT[2], 0.85], c);
     canvas.fill(PANEL_X, PANEL_Y, 3.0, HEADER_H, ACCENT, c);
-    canvas.text(FONT_TITLE, PANEL_X + 9.0, PANEL_Y + 5.0, 10.0, HIGHLIGHT, "INVENTORY", false, c);
+    let title = match ui.screen {
+        McScreen::Inventory => "INVENTORY".to_owned(),
+        McScreen::Workbench => "CRAFTING TABLE".to_owned(),
+        McScreen::Furnace | McScreen::Chest => ui.container_title.clone(),
+    };
+    canvas.text(FONT_TITLE, PANEL_X + 9.0, PANEL_Y + 5.0, 10.0, HIGHLIGHT, &title, false, c);
     canvas.text(FONT_SMALL, PANEL_X + PANEL_W - 8.0, PANEL_Y + 7.5, 6.0, TEXT_DIM, "SURVIVAL  //  E TO CLOSE", true, c);
     canvas.frame(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, EDGE, c);
     canvas.brackets(PANEL_X - 2.0, PANEL_Y - 2.0, PANEL_W + 4.0, PANEL_H + 4.0, 8.0, [ACCENT[0], ACCENT[1], ACCENT[2], 0.9], c);
 
     // The character window: clear, with a frame and MW2 brackets.
-    canvas.quad(bx, by + bh - 26.0, bw, 26.0, [0.0, 0.0, 0.0, 0.35], "gradient_fadein_fadebottom", [0.0, 0.0, 1.0, 1.0], c);
-    canvas.frame(bx, by, bw, bh, EDGE, c);
-    canvas.brackets(bx, by, bw, bh, 5.0, ACCENT, c);
-    canvas.text(FONT_SMALL, bx + 4.0, by + bh - 9.0, 5.5, [HIGHLIGHT[0], HIGHLIGHT[1], HIGHLIGHT[2], 0.75], "OPERATOR", false, c);
+    if !chest {
+        canvas.quad(bx, by + bh - 26.0, bw, 26.0, [0.0, 0.0, 0.0, 0.35], "gradient_fadein_fadebottom", [0.0, 0.0, 1.0, 1.0], c);
+        canvas.frame(bx, by, bw, bh, EDGE, c);
+        canvas.brackets(bx, by, bw, bh, 5.0, ACCENT, c);
+        canvas.text(FONT_SMALL, bx + 4.0, by + bh - 9.0, 5.5, [HIGHLIGHT[0], HIGHLIGHT[1], HIGHLIGHT[2], 0.75], "OPERATOR", false, c);
+    }
 
     // Section labels.
-    canvas.text(FONT_SMALL, 22.0, -100.0, 6.0, TEXT_DIM, "CRAFTING", false, c);
-    canvas.fill(22.0, -92.5, 90.0, 0.5, EDGE, c);
-    canvas.text(FONT_TITLE, 68.0, -73.5, 11.0, TEXT_DIM, ">", false, c);
+    match ui.screen {
+        McScreen::Workbench => {
+            canvas.text(FONT_SMALL, WB_X, -100.0, 6.0, TEXT_DIM, "CRAFTING  3X3", false, c);
+            canvas.fill(WB_X, -92.5, 100.0, 0.5, EDGE, c);
+            canvas.text(FONT_TITLE, WB_X + P * 3.0 + 1.0, WB_Y + P * 1.5 - 7.5, 11.0, TEXT_DIM, ">", false, c);
+        }
+        McScreen::Furnace => {
+            canvas.text(FONT_SMALL, 22.0, -100.0, 6.0, TEXT_DIM, "SMELTING", false, c);
+            canvas.fill(22.0, -92.5, 90.0, 0.5, EDGE, c);
+            // The flame: fuel left to burn, burning down.
+            let (fx, fy, fs) = (FURNACE_X + 3.0, -66.0, 14.0);
+            canvas.fill(fx, fy, fs, fs, SLOT, c);
+            canvas.frame(fx, fy, fs, fs, SLOT_EDGE, c);
+            let burn = ui.furnace_burn.clamp(0.0, 1.0);
+            if burn > 0.0 {
+                canvas.fill(fx + 1.0, fy + 1.0 + (fs - 2.0) * (1.0 - burn), fs - 2.0, (fs - 2.0) * burn, ACCENT, c);
+            }
+            // The arrow: cooking done.
+            let (ax, ay, aw) = (FURNACE_X + S + 6.0, -59.0, 88.0 - (FURNACE_X + S + 6.0) - 4.0);
+            canvas.fill(ax, ay, aw, 4.0, SLOT, c);
+            canvas.frame(ax, ay, aw, 4.0, SLOT_EDGE, c);
+            let cook = ui.furnace_cook.clamp(0.0, 1.0);
+            if cook > 0.0 {
+                canvas.fill(ax, ay, aw * cook, 4.0, HIGHLIGHT, c);
+            }
+        }
+        McScreen::Chest => {
+            canvas.text(FONT_SMALL, GRID_X, -104.0, 6.0, TEXT_DIM, "STORAGE", false, c);
+        }
+        McScreen::Inventory => {
+            canvas.text(FONT_SMALL, 22.0, -100.0, 6.0, TEXT_DIM, "CRAFTING", false, c);
+            canvas.fill(22.0, -92.5, 90.0, 0.5, EDGE, c);
+            canvas.text(FONT_TITLE, 68.0, -73.5, 11.0, TEXT_DIM, ">", false, c);
+        }
+    }
     canvas.text(FONT_SMALL, GRID_X, -6.5, 6.0, TEXT_DIM, "BACKPACK", false, c);
     canvas.fill(GRID_X + 38.0, -3.5, 158.0, 0.5, EDGE, c);
     canvas.fill(GRID_X, 75.0, 196.0, 0.5, [ACCENT[0], ACCENT[1], ACCENT[2], 0.45], c);
 
     // The slots.
-    for (slot, x, y, size) in layout() {
+    for (slot, x, y, size) in layout(ui.screen) {
         let hover = hovered == Some(slot);
-        let is_result = slot == McSlot::Result;
+        let is_result = matches!(slot, McSlot::Result | McSlot::WorkbenchResult | McSlot::Furnace(2));
         canvas.fill(x, y, size, size, if hover { SLOT_HOVER } else { SLOT }, c);
         canvas.frame(x, y, size, size, if hover { HIGHLIGHT } else if is_result { [ACCENT[0], ACCENT[1], ACCENT[2], 0.55] } else { SLOT_EDGE }, c);
         if let McSlot::Inventory(i) = slot

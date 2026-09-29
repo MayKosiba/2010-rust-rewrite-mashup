@@ -28,6 +28,23 @@ pub enum McSlot {
     Inventory(usize),
     Crafting(usize),
     Result,
+    /// The crafting table's 3x3 grid and its result.
+    Workbench(usize),
+    WorkbenchResult,
+    /// A furnace's input, fuel and output.
+    Furnace(usize),
+    /// A chest's or barrel's 27 slots.
+    Chest(usize),
+}
+
+/// Which screen the inventory shows beside the player's slots.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum McScreen {
+    #[default]
+    Inventory,
+    Workbench,
+    Furnace,
+    Chest,
 }
 
 /// What the player did on the inventory screen, applied with vanilla's
@@ -59,6 +76,26 @@ pub struct MinecraftUi {
     pub slots: Vec<Option<McStack>>,
     pub crafting: [Option<McStack>; 4],
     pub result: Option<McStack>,
+    /// A block's screen (crafting table, furnace, chest) the world opened;
+    /// it goes back to the inventory when the screen closes.
+    pub screen: McScreen,
+    pub workbench: [Option<McStack>; 9],
+    pub workbench_result: Option<McStack>,
+    /// The open furnace: input, fuel, output; fuel burning and cooking
+    /// done, 0 to 1; and its name (`FURNACE`, `SMOKER`...).
+    pub furnace: [Option<McStack>; 3],
+    pub furnace_burn: f32,
+    pub furnace_cook: f32,
+    pub container_title: String,
+    /// The open chest's slots.
+    pub chest: Vec<Option<McStack>>,
+    /// A dimension the console asked to go to (`overworld`, `nether`,
+    /// `end`), for the world to take.
+    pub travel_request: Option<String>,
+    /// A console request for the End's fight (`kill`, `reset`).
+    pub dragon_request: Option<String>,
+    /// A boss's name and health left, 0 to 1, for the bar at the top.
+    pub boss: Option<(String, f32)>,
     /// The stack on the cursor.
     pub cursor: Option<McStack>,
     /// Item icons: one atlas, and each item's rectangle in it (s0 t0 s1 t1).

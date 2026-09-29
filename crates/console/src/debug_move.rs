@@ -47,6 +47,17 @@ pub(crate) fn spawn_showpos_hud(commands: &mut Commands, font: Handle<Font>) {
 
 pub(crate) fn register_debug_move_commands(registry: &mut ConsoleRegistry) {
     registry.register(crate::CommandSpec::new("skate").usage("skate [on|off|status] - local Skate gameplay (J toggles)"));
+    registry.register(
+        crate::CommandSpec::new("dimension")
+            .alias("mc_dimension")
+            .usage("dimension <overworld|nether|end> — go to a Minecraft dimension (the Minecraft map)")
+            .arg(crate::StaticCompleter::new(["overworld", "nether", "end"])),
+    );
+    registry.register(
+        crate::CommandSpec::new("dragon")
+            .usage("dragon <kill|reset> — end the Ender Dragon fight, or start it over (in the End)")
+            .arg(crate::StaticCompleter::new(["kill", "reset"])),
+    );
     if registry.resolve("showpos").is_none() {
         registry.register(
             crate::CommandSpec::new("showpos")
@@ -104,7 +115,7 @@ pub(crate) fn register_debug_move_commands(registry: &mut ConsoleRegistry) {
 }
 
 pub(crate) fn route_debug_move_commands(
-    mut skate: ResMut<frame::SkateMode>,
+    (mut skate, mut minecraft): (ResMut<frame::SkateMode>, Option<ResMut<frame::MinecraftUi>>),
     mut events: MessageReader<ConsoleCommand>,
     mut console: ResMut<ConsoleState>,
     settings: Res<ConsoleSettings>,
@@ -136,6 +147,28 @@ pub(crate) fn route_debug_move_commands(
                     _ => { echo("usage: skate [on|off|status]".into(), &mut console, &mut line); continue; }
                 }
                 echo(format!("skate active={} ready={} controller={:?} tick={} {}",skate.active,skate.preloaded,skate.controller,skate.tick,skate.status),&mut console,&mut line);
+            }
+
+            "dragon" => match (cmd.args.first().map(String::as_str), minecraft.as_deref_mut()) {
+                (Some(what @ ("kill" | "reset")), Some(ui)) if ui.active => {
+                    ui.dragon_request = Some(what.to_owned());
+                    echo(format!("dragon: {what}"), &mut console, &mut line);
+                }
+                _ => echo("usage: dragon <kill|reset> (in the End)".into(), &mut console, &mut line),
+            },
+
+            "dimension" | "mc_dimension" => {
+                let target = cmd.args.first().map(String::as_str);
+                match (target, minecraft.as_deref_mut()) {
+                    (Some(to @ ("overworld" | "nether" | "end")), Some(ui)) if ui.active => {
+                        ui.travel_request = Some(to.to_owned());
+                        echo(format!("dimension: going to {to}"), &mut console, &mut line);
+                    }
+                    (Some("overworld" | "nether" | "end"), _) => {
+                        echo("dimension: only on the Minecraft map, while alive".into(), &mut console, &mut line);
+                    }
+                    _ => echo("usage: dimension <overworld|nether|end>".into(), &mut console, &mut line),
+                }
             }
 
             "showpos" | "debug_pos" => match cmd.args.first().map(String::as_str) {

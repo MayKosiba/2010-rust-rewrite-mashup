@@ -23,6 +23,17 @@ fn main() {
             args.push("menu".into());
         }
     }
+    // Off Windows there is no first-run flow; derive the board and rig from
+    // already-converted Skate 3 data when `.env` points at it.
+    #[cfg(not(windows))]
+    if let Some(skate) = {
+        asset_transport::load_dotenv();
+        std::env::var_os("IW4L_SKATE_ASSETS")
+    } {
+        if let Err(e) = assets::skate_board::ensure(std::path::Path::new(&skate)) {
+            eprintln!("skate board: {e}");
+        }
+    }
     let artifacts = ensure_artifacts_dir().unwrap_or_else(|e| diag::exit_launch_error(&e));
     announce_log(diag::init_log(&artifacts));
     let (mode, acceptance) =

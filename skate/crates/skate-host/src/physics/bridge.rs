@@ -283,6 +283,14 @@ pub struct ControllerTransport {
 pub struct InputFrame {
     samples: [Result<crate::input::platform::DevicePacket, crate::input::platform::DeviceError>; 4],
 }
+/// Feeds the non-Windows virtual pad (slot 0) for the next `poll`. XInput
+/// layout: `buttons` uses XINPUT_GAMEPAD_* bits, sticks are signed 16-bit.
+#[cfg(not(windows))]
+pub fn set_virtual_pad(pad: Option<(u16, [u8; 2], [i16; 2], [i16; 2])>) {
+    crate::input::platform::virtual_pad::set(pad.map(|(buttons, triggers, left, right)| {
+        skate_core::input::xbox::XboxState { buttons, triggers, left, right }
+    }));
+}
 impl ControllerTransport {
     pub fn poll(&mut self) -> InputFrame {
         InputFrame {

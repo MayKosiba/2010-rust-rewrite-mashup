@@ -46,6 +46,8 @@ impl Block {
                 | "redstone_torch"
                 | "redstone_wall_torch"
                 | "chest"
+                | "trapped_chest"
+                | "end_portal"
                 | "lever"
                 | "redstone_wire"
                 | "daylight_detector"

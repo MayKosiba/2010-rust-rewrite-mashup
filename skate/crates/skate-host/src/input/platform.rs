@@ -138,7 +138,50 @@ pub(crate) fn poll_cached(
     #[cfg(windows)]
     return windows::poll(index as u32, cache);
     #[cfg(not(windows))]
-    Err(DeviceError::UnsupportedPlatform)
+    {
+        let _ = cache;
+        virtual_pad::poll(index)
+    }
+}
+
+/// Off Windows there is no XInput; the host fills slot 0 each frame from the
+/// keyboard or an SDL/evdev gamepad instead.
+#[cfg(not(windows))]
+pub(crate) mod virtual_pad {
+    use super::*;
+    use std::sync::Mutex;
+
+    static PAD: Mutex<(u32, Option<XboxState>)> = Mutex::new((0, None));
+
+    pub(crate) fn set(state: Option<XboxState>) {
+        let mut pad = PAD.lock().unwrap();
+        if pad.1.as_ref().map(key) != state.as_ref().map(key) {
+            pad.0 = pad.0.wrapping_add(1);
+        }
+        pad.1 = state;
+    }
+
+    fn key(s: &XboxState) -> (u16, [u8; 2], [i16; 2], [i16; 2]) {
+        (s.buttons, s.triggers, s.left, s.right)
+    }
+
+    pub(super) fn poll(index: usize) -> Result<DevicePacket, DeviceError> {
+        let pad = PAD.lock().unwrap();
+        match (index, &pad.1) {
+            (0, Some(s)) => Ok(DevicePacket {
+                number: pad.0,
+                state: XboxState {
+                    buttons: s.buttons,
+                    triggers: s.triggers,
+                    left: s.left,
+                    right: s.right,
+                },
+                subtype: 1,
+            }),
+            (0, None) => Err(DeviceError::UnsupportedPlatform),
+            _ => Err(DeviceError::Disconnected),
+        }
+    }
 }
 
 #[cfg(test)]

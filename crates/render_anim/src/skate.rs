@@ -302,7 +302,21 @@ fn update(
     mut authority: Option<ResMut<net::AuthorityWorld>>,
     mut mode: ResMut<SkateMode>,
     mut host: ResMut<Host>,
+    keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<&Gamepad>,
+    active_pad: Option<Res<frame::ActivePad>>,
 ) {
+    #[cfg(not(windows))]
+    {
+        let pad = active_pad
+            .and_then(|a| a.0)
+            .and_then(|e| gamepads.get(e).ok())
+            .or_else(|| gamepads.iter().next());
+        let typing = mode.input_blocked;
+        skate_host::bridge::set_virtual_pad(Some(virtual_pad(&keys, pad, typing)));
+    }
+    #[cfg(windows)]
+    let _ = (&keys, &gamepads, &active_pad);
     let Some(authority) = authority.as_deref_mut() else {
         return;
     };
@@ -457,4 +471,97 @@ fn update(
             stop(&mut host, &mut mode, authority);
         }
     }
+}
+
+/// Keyboard (and SDL/evdev gamepad) as one XInput pad for the skate engine,
+/// which reads only XInput. Keyboard layout:
+///   WASD left stick (steer, lean)   arrows right stick (flick-it tricks)
+///   Space A (push)   Shift X (brake/powerslide)   F B   R Y
+///   Z / C left / right trigger (grabs)   Q / E LB / RB
+///   Enter Start   Backspace Back   1-4 D-pad up/down/left/right
+#[cfg(not(windows))]
+fn virtual_pad(
+    keys: &ButtonInput<KeyCode>,
+    pad: Option<&Gamepad>,
+    blocked: bool,
+) -> (u16, [u8; 2], [i16; 2], [i16; 2]) {
+    use bevy::input::gamepad::GamepadButton as B;
+    let mut buttons = 0u16;
+    let mut triggers = [0u8; 2];
+    let mut left = Vec2::ZERO;
+    let mut right = Vec2::ZERO;
+    if let Some(pad) = pad {
+        for (button, bit) in [
+            (B::DPadUp, 0x0001),
+            (B::DPadDown, 0x0002),
+            (B::DPadLeft, 0x0004),
+            (B::DPadRight, 0x0008),
+            (B::Start, 0x0010),
+            (B::Select, 0x0020),
+            (B::LeftThumb, 0x0040),
+            (B::RightThumb, 0x0080),
+            (B::LeftTrigger, 0x0100),
+            (B::RightTrigger, 0x0200),
+            (B::South, 0x1000),
+            (B::East, 0x2000),
+            (B::West, 0x4000),
+            (B::North, 0x8000),
+        ] {
+            if pad.pressed(button) {
+                buttons |= bit;
+            }
+        }
+        let trigger = |b: B| (pad.get(b).unwrap_or(0.0).clamp(0.0, 1.0) * 255.0) as u8;
+        triggers = [trigger(B::LeftTrigger2), trigger(B::RightTrigger2)];
+        left = pad.left_stick();
+        right = pad.right_stick();
+    }
+    if !blocked {
+        let axis = |neg: KeyCode, pos: KeyCode| {
+            f32::from(keys.pressed(pos) as u8) - f32::from(keys.pressed(neg) as u8)
+        };
+        let stick = |v: Vec2| if v == Vec2::ZERO { v } else { v.normalize() };
+        let kl = stick(Vec2::new(axis(KeyCode::KeyA, KeyCode::KeyD), axis(KeyCode::KeyS, KeyCode::KeyW)));
+        let kr = stick(Vec2::new(
+            axis(KeyCode::ArrowLeft, KeyCode::ArrowRight),
+            axis(KeyCode::ArrowDown, KeyCode::ArrowUp),
+        ));
+        if kl != Vec2::ZERO {
+            left = kl;
+        }
+        if kr != Vec2::ZERO {
+            right = kr;
+        }
+        for (key, bit) in [
+            (KeyCode::Digit1, 0x0001),
+            (KeyCode::Digit2, 0x0002),
+            (KeyCode::Digit3, 0x0004),
+            (KeyCode::Digit4, 0x0008),
+            (KeyCode::Enter, 0x0010),
+            (KeyCode::Backspace, 0x0020),
+            (KeyCode::KeyQ, 0x0100),
+            (KeyCode::KeyE, 0x0200),
+            (KeyCode::Space, 0x1000),
+            (KeyCode::KeyF, 0x2000),
+            (KeyCode::ShiftLeft, 0x4000),
+            (KeyCode::KeyR, 0x8000),
+        ] {
+            if keys.pressed(key) {
+                buttons |= bit;
+            }
+        }
+        if keys.pressed(KeyCode::KeyZ) {
+            triggers[0] = 255;
+        }
+        if keys.pressed(KeyCode::KeyC) {
+            triggers[1] = 255;
+        }
+    }
+    let axis16 = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0) as i16;
+    (
+        buttons,
+        triggers,
+        [axis16(left.x), axis16(left.y)],
+        [axis16(right.x), axis16(right.y)],
+    )
 }

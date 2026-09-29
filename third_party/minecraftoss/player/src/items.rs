@@ -124,6 +124,13 @@ impl WorldItems {
         self.player_random.next_double()
     }
 
+    /// Numbers entities this spawns from `first` on, so a client can keep its
+    /// own drops apart from IDs a server hands out.
+    pub fn with_first_entity_id(mut self, first: u32) -> Self {
+        self.next_entity_id = first;
+        self
+    }
+
     /// Separate streams mirror the level, fresh entity and player random
     /// sources. A harness can provide captured seeds for exact trajectories.
     pub fn with_seeds(world: u64, entities: u64, player: u64) -> Self {

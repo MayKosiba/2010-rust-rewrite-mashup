@@ -142,6 +142,54 @@ pub fn block_icon(
     Ok((output.pixels().any(|pixel| pixel[3] > 0)).then_some(output))
 }
 
+/// A chest's item icon. Its item model is `minecraft:special` (vanilla draws
+/// the chest block entity), so this rasterizes the closed `ChestModel` the
+/// world draws, at `item/template_chest`'s gui angle (30, 45) and scale.
+pub fn chest_icon(packs: &PackStack, block: &crate::scene::Block, icon_size: usize) -> Result<Option<RgbaImage>> {
+    // Facing south, the lock toward the gui's viewer as vanilla shows it.
+    let block = block.clone().with("facing", "south");
+    let model = crate::model::closed_chest_model(&block)?;
+    let (x_angle, y_angle, scale) = (30.0f32.to_radians(), 45.0f32.to_radians(), 0.625);
+    let mut output = RgbaImage::new(icon_size as u32, icon_size as u32);
+    let mut depth = vec![vec![f32::NEG_INFINITY; icon_size]; icon_size];
+    let mut sheets: HashMap<ResourceId, Option<RgbaImage>> = HashMap::new();
+    for element in &model.elements {
+        let (from, to) = (element.from.map(|v| v * 16.0), element.to.map(|v| v * 16.0));
+        for (name, corners) in cuboid_faces(from, to) {
+            if !face_faces_camera(name, x_angle, y_angle) {
+                continue;
+            }
+            let Some(face) = element.faces.iter().find(|face| face.direction == name) else {
+                continue;
+            };
+            if !sheets.contains_key(&face.texture) {
+                let sheet = packs.texture(&face.texture)?.map(|bytes| image::load_from_memory(&bytes)).transpose()?.map(|i| i.to_rgba8());
+                sheets.insert(face.texture.clone(), sheet);
+            }
+            let Some(source) = sheets[&face.texture].as_ref() else {
+                continue;
+            };
+            let side = source.width().min(source.height());
+            let vertices = corners.map(|point| transform(point, x_angle, y_angle, scale, icon_size));
+            let shade = item_diffuse_light(name, x_angle, y_angle);
+            for triangle in [[0, 1, 2], [0, 2, 3]] {
+                raster_triangle(
+                    &mut output,
+                    &mut depth,
+                    source,
+                    side,
+                    icon_size,
+                    shade,
+                    [255; 3],
+                    triangle.map(|i| vertices[i]),
+                    triangle.map(|i| uv(i, face.uv)),
+                );
+            }
+        }
+    }
+    Ok((output.pixels().any(|pixel| pixel[3] > 0)).then_some(output))
+}
+
 fn item_diffuse_light(face: &str, x_angle: f32, y_angle: f32) -> f32 {
     // Lighting.Entry.ITEMS_3D and minecraft_mix_light in the pinned 26.3
     // Lighting.java / assets/minecraft/shaders/include/light.glsl.

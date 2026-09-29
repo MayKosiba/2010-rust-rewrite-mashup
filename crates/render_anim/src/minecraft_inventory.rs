@@ -59,7 +59,7 @@ impl InventoryUi {
         let keep = |stack: &Option<ItemStack>| {
             stack.as_ref().is_none_or(|s| weapon_of(s).is_none_or(|w| owned.contains(&w)))
         };
-        for slot in inventory.slots.iter_mut().chain(inventory.crafting.iter_mut()) {
+        for slot in inventory.slots.iter_mut().chain(inventory.crafting.iter_mut()).chain(inventory.workbench.iter_mut()) {
             if !keep(slot) {
                 *slot = None;
             }
@@ -71,6 +71,7 @@ impl InventoryUi {
             .slots
             .iter()
             .chain(inventory.crafting.iter())
+            .chain(inventory.workbench.iter())
             .chain(std::iter::once(&inventory.cursor))
             .filter_map(|s| s.as_ref().and_then(weapon_of))
             .collect();
@@ -95,13 +96,42 @@ impl InventoryUi {
         ui: &mut MinecraftUi,
         inventory: &mut Inventory,
         selected: &mut usize,
+        containers: &mut crate::minecraft_containers::Containers,
     ) -> Vec<ItemStack> {
+        use crate::minecraft_containers::Open;
         let mut thrown = Vec::new();
         for click in std::mem::take(&mut ui.clicks) {
             match click {
+                McClick::Slot { slot: McSlot::Inventory(index), shift: true, .. }
+                    if index < 36 && containers.opened().is_some() =>
+                {
+                    // MW2 guns stay with the player.
+                    if inventory.slots[index].as_ref().is_some_and(|s| weapon_of(s).is_some()) {
+                        continue;
+                    }
+                    if let Some(open) = containers.opened() {
+                        crate::minecraft_containers::quick_move(open, index, inventory);
+                    }
+                }
                 McClick::Slot { slot: McSlot::Inventory(index), right, shift } => {
                     if let Some(stack) = inventory.click(Some(index), right, shift) {
                         thrown.push(stack);
+                    }
+                }
+                McClick::Slot { slot: McSlot::Furnace(index), right, shift } => {
+                    if inventory.cursor.as_ref().is_some_and(|s| weapon_of(s).is_some()) {
+                        continue;
+                    }
+                    if let Some(Open::Furnace(furnace)) = containers.opened() {
+                        furnace.click_slot(index, right, shift, inventory);
+                    }
+                }
+                McClick::Slot { slot: McSlot::Chest(index), right, shift } => {
+                    if inventory.cursor.as_ref().is_some_and(|s| weapon_of(s).is_some()) {
+                        continue;
+                    }
+                    if let Some(Open::Chest(chest)) = containers.opened() {
+                        chest.click_slot(index, right, shift, inventory);
                     }
                 }
                 McClick::Slot { slot: McSlot::Crafting(index), right, shift } => {
@@ -110,17 +140,36 @@ impl InventoryUi {
                 McClick::Slot { slot: McSlot::Result, shift, .. } => {
                     inventory.take_crafting_output(shift);
                 }
+                McClick::Slot { slot: McSlot::Workbench(index), right, shift } => {
+                    inventory.click_workbench_slot(index, right, shift);
+                }
+                McClick::Slot { slot: McSlot::WorkbenchResult, shift, .. } => {
+                    inventory.take_workbench_output(shift);
+                }
                 McClick::Outside { right } => {
                     if let Some(stack) = inventory.click(None, right, false) {
                         thrown.push(stack);
                     }
                 }
-                McClick::Gather { right } => inventory.pickup_all(right),
+                McClick::Gather { right } => match containers.opened() {
+                    Some(Open::Chest(chest)) => chest.pickup_all(right, inventory),
+                    _ => inventory.pickup_all(right),
+                },
                 McClick::Swap { slot: McSlot::Inventory(index), hotbar } => inventory.number_swap(index, hotbar),
+                McClick::Swap { slot: McSlot::Chest(index), hotbar } => {
+                    if inventory.slots[hotbar].as_ref().is_some_and(|s| weapon_of(s).is_some()) {
+                        continue;
+                    }
+                    if let Some(Open::Chest(chest)) = containers.opened() {
+                        chest.number_swap(index, hotbar, inventory);
+                    }
+                }
                 McClick::Swap { .. } => {}
                 McClick::Spread { slots, right } => inventory.distribute(&slots, right),
                 McClick::Close => {
                     thrown.extend(inventory.settle_crafting());
+                    thrown.extend(inventory.settle_workbench());
+                    containers.close();
                     if let Some(rest) = inventory.settle_cursor() {
                         thrown.push(rest);
                     }
@@ -188,6 +237,7 @@ impl InventoryUi {
         selected: usize,
         packs: &PackStack,
         images: &mut Assets<Image>,
+        containers: &mut crate::minecraft_containers::Containers,
     ) {
         let language = self
             .language
@@ -207,7 +257,10 @@ impl InventoryUi {
         ui.slots = inventory.slots.iter().take(frame::minecraft_ui::MC_INVENTORY_SLOTS).map(&mut convert).collect();
         ui.crafting = std::array::from_fn(|i| convert(&inventory.crafting[i]));
         ui.result = convert(&inventory.crafting_output());
+        ui.workbench = std::array::from_fn(|i| convert(&inventory.workbench[i]));
+        ui.workbench_result = convert(&inventory.workbench_output());
         ui.cursor = convert(&inventory.cursor);
+        containers.publish(ui, &mut convert);
         if ui.selected != selected {
             let name = inventory.slots[selected]
                 .as_ref()

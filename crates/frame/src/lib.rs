@@ -37,4 +37,4 @@ pub use skate::SkateMode;
 pub mod minecraft_ui;
 pub mod pad;
 pub use pad::ActivePad;
-pub use minecraft_ui::{InventoryPuppet, McClick, McSlot, McStack, MinecraftUi};
+pub use minecraft_ui::{InventoryPuppet, McClick, McScreen, McSlot, McStack, MinecraftUi};

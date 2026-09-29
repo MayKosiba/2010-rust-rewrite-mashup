@@ -78,6 +78,51 @@ struct Loaded {
     celestial: Arc<image::RgbaImage>,
     cloud_mask: Option<CloudMask>,
     crack_texture: Arc<image::RgbaImage>,
+    dimension: Dimension,
+}
+
+/// Session world directories in the temp directory: prefix, process id, seed.
+const WORLD_DIR_PREFIX: &str = "iw4l-minecraft-";
+
+/// Removes world directories of sessions that ended without cleaning up
+/// (the game quit while a Minecraft world was loaded).
+fn remove_stale_world_dirs() {
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name.to_str().and_then(|n| n.strip_prefix(WORLD_DIR_PREFIX)) else { continue };
+        let Some(pid) = rest.split('-').next().and_then(|p| p.parse::<u32>().ok()) else { continue };
+        if pid == std::process::id() {
+            continue;
+        }
+        #[cfg(target_os = "linux")]
+        let ended = !std::path::Path::new("/proc").join(pid.to_string()).exists();
+        #[cfg(not(target_os = "linux"))]
+        let ended = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().is_ok_and(|age| age.as_secs() > 12 * 3600));
+        if ended {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Dimensions as block entities are keyed.
+fn dimension_index(dimension: Dimension) -> u8 {
+    match dimension {
+        Dimension::Overworld => 0,
+        Dimension::Nether => 1,
+        Dimension::End => 2,
+    }
+}
+
+/// A trip to another dimension, taken at the start of the next frame.
+struct Travel {
+    to: Dimension,
+    /// Through a portal: come out at one (found or built); otherwise at the
+    /// dimension's spawn, as a respawn does.
+    portal: bool,
 }
 
 /// The hand's swing and the timers of mining and placing by hand.
@@ -126,6 +171,18 @@ struct Runtime {
     /// Boxes of each shape id, to reuse an id for a repeated shape.
     shape_ids: HashMap<Vec<[u32; 6]>, u16>,
     was_alive: bool,
+    /// This session's world directory: each dimension's chunks are saved
+    /// here when the player leaves it, and loaded from here on return.
+    world_dir: Option<std::path::PathBuf>,
+    containers: crate::minecraft_containers::Containers,
+    portal: crate::minecraft_portal::PortalTimer,
+    travel: Option<Travel>,
+    /// The player's feet in blocks last frame.
+    last_feet: [f64; 3],
+    /// Died outside the Overworld: the respawn is back in the Overworld.
+    died_away: bool,
+    /// The End's dragon fight, kept for the session.
+    dragon: crate::minecraft_dragon::Fight,
 }
 
 /// The player's MW2 body stands in the inventory's character window, on a
@@ -214,7 +271,7 @@ pub(crate) fn register(app: &mut App) {
         );
 }
 
-fn load(seed: i64) -> Result<Loaded, String> {
+fn load(seed: i64, world_dir: std::path::PathBuf) -> Result<Loaded, String> {
     let root = assets::minecraft_map::root().ok_or_else(assets::minecraft_setup::status)?;
     let paths = DataPaths::under(&root);
     let registries = Arc::new(Registries::load(&paths)?);
@@ -225,7 +282,7 @@ fn load(seed: i64) -> Result<Loaded, String> {
         seed,
         VIEW_DISTANCE,
         Dimension::Overworld,
-        None,
+        Some(&world_dir),
     )
     .map_err(|e| e.to_string())?;
     let build = minecraft_terrain::mesh::build(&HandcraftedScene::default(), &packs)
@@ -247,7 +304,82 @@ fn load(seed: i64) -> Result<Loaded, String> {
         celestial,
         cloud_mask,
         crack_texture,
+        dimension: Dimension::Overworld,
     })
+}
+
+/// Leaves `from` for another dimension: saves its chunks, streams `to` from
+/// the same world directory, and finds where the player comes out (and the
+/// blocks to set there first) around `target`.
+fn switch_dimension(
+    mut from: Loaded,
+    to: Dimension,
+    world_dir: &std::path::Path,
+    target: Option<(i32, i32, i32)>,
+) -> Result<(Loaded, (f64, f64, f64)), String> {
+    from.stream.save_all();
+    let Loaded { stream, packs, atlas, registries, seed, celestial, cloud_mask, crack_texture, .. } = from;
+    // Its workers finish before the next stream opens the same directory.
+    drop(stream);
+    let mut stream = TerrainStream::for_dimension(registries.clone(), seed, VIEW_DISTANCE, to, Some(world_dir))
+        .map_err(|e| e.to_string())?;
+    let arrival = match target {
+        // The End is always entered on its obsidian platform
+        // (`ServerPlayer.createEndPlatform`): five by five, cleared above.
+        _ if to == Dimension::End => {
+            let (x, y, z) = stream.player_spawn;
+            let (bx, mut by, bz) = (x.floor() as i32, y.floor() as i32, z.floor() as i32);
+            let mut chunks = Vec::new();
+            for cx in ((bx - 2) >> 4)..=((bx + 2) >> 4) {
+                for cz in ((bz - 2) >> 4)..=((bz + 2) >> 4) {
+                    chunks.push(stream.load_now(minecraftoss_core::ChunkPos::new(cx, cz)));
+                }
+            }
+            // Where the island has grown over the platform's height, the
+            // platform goes on the island's top rather than in a sealed pocket.
+            let solid_at = |x: i32, y: i32, z: i32| {
+                chunks.iter().find(|c| c.pos.x == x >> 4 && c.pos.z == z >> 4).is_some_and(|c| {
+                    y >= c.min_y() && y < c.min_y() + c.height() && !registries.blocks.is_air(c.block((x & 15) as usize, y, (z & 15) as usize))
+                })
+            };
+            if let Some(top) = (by..by + 80).rev().find(|&h| (-2..=2).any(|dx| (-2..=2).any(|dz| solid_at(bx + dx, h, bz + dz)))) {
+                by = top + 1;
+            }
+            let spawn = (x, f64::from(by), z);
+            let obsidian = stream.states.state_of(&minecraft_terrain::scene::Block::new("minecraft:obsidian")).unwrap_or(BlockStateId::AIR);
+            let mut edits = Vec::new();
+            for dx in -2..=2 {
+                for dz in -2..=2 {
+                    edits.push((minecraftoss_core::BlockPos::new(bx + dx, by - 1, bz + dz), obsidian));
+                    for dy in 0..3 {
+                        edits.push((minecraftoss_core::BlockPos::new(bx + dx, by + dy, bz + dz), BlockStateId::AIR));
+                    }
+                }
+            }
+            stream.set_blocks(&edits);
+            spawn
+        }
+        Some((x, y, z)) => {
+            let range = if to == Dimension::Nether { (32, 118) } else { (-60, 250) };
+            let (feet, edits) = crate::minecraft_portal::arrival(&mut stream, &registries, (x, z), y, range, to == Dimension::Nether);
+            let states: Vec<_> = edits
+                .iter()
+                .map(|&((x, y, z), ref block)| {
+                    let state = block.as_ref().and_then(|b| stream.states.state_of(b)).unwrap_or(BlockStateId::AIR);
+                    (minecraftoss_core::BlockPos::new(x, y, z), state)
+                })
+                .collect();
+            stream.set_blocks(&states);
+            feet
+        }
+        None => stream.player_spawn,
+    };
+    let scene = HandcraftedScene::streamed(stream.states.clone());
+    let environment = DimensionEnvironment::load(&registries, to.dimension_type())?;
+    Ok((
+        Loaded { stream, scene, packs, atlas, registries, seed, environment, celestial, cloud_mask, crack_texture, dimension: to },
+        arrival,
+    ))
 }
 
 /// The sky's sun and moon phases, laid out as MinecraftOSS lays them out.
@@ -305,12 +437,13 @@ fn update(
     presented: Res<net::PresentedSnapshot>,
     authority: Option<ResMut<net::AuthorityWorld>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    (mut ui, mut puppet, mut images, mut sound_queue, buttons): (
+    (mut ui, mut puppet, mut images, mut sound_queue, buttons, keys): (
         ResMut<frame::MinecraftUi>,
         ResMut<frame::InventoryPuppet>,
         ResMut<Assets<Image>>,
         ResMut<audio::McSoundQueue>,
         Res<ButtonInput<MouseButton>>,
+        Res<ButtonInput<KeyCode>>,
     ),
     mut view: ResMut<MinecraftWorldView>,
     mut runtime: NonSendMut<Runtime>,
@@ -330,11 +463,14 @@ fn update(
         if assets::minecraft_map::is_minecraft(&match_.zone) {
             let seed = seed();
             diag::info!(World, "Minecraft world: seed {seed}");
+            remove_stale_world_dirs();
+            let dir = std::env::temp_dir().join(format!("{WORLD_DIR_PREFIX}{}-{seed:x}", std::process::id()));
+            runtime.world_dir = Some(dir.clone());
             let (send, receive) = mpsc::channel();
             let _ = std::thread::Builder::new()
                 .name("minecraft-world-load".into())
                 .spawn(move || {
-                    let _ = send.send(load(seed));
+                    let _ = send.send(load(seed, dir));
                 });
             runtime.loading = Some(receive);
             view.active = true;
@@ -350,14 +486,6 @@ fn update(
         runtime.loading = None;
         match result {
             Ok(world) => {
-                let (x, y, z) = world.stream.player_spawn;
-                view.origin = [x, y, z];
-                view.atlas = Some(world.atlas.clone());
-                view.celestial = Some(world.celestial.clone());
-                view.crack_texture = Some(world.crack_texture.clone());
-                runtime.mining = Default::default();
-                runtime.sounds = Some(crate::minecraft_sounds::Sounds::load(&world.packs));
-                runtime.entities = Some(crate::minecraft_entities::Entities::new(&world.stream, world.seed));
                 runtime.day = DayCycle::default();
                 // Game ticks since sunrise to start at: 6000 noon, 13000
                 // dusk, 18000 midnight.
@@ -367,31 +495,56 @@ fn update(
                 {
                     runtime.day.set(ticks);
                 }
-                runtime.environment_accumulator = 0.0;
-                runtime.environment_primed = false;
-                runtime.light = Some(SkyLight::streamed());
-                runtime.light_volume_at = None;
-                runtime.cloud_center = None;
-                view.generation += 1;
-                sim::voxel::activate(
-                    authority.0.content().clip_brushes(),
-                    view.origin,
-                    vec![Vec::new()],
-                );
-                diag::info!(
-                    World,
-                    "Minecraft world ready: seed {} spawn {:?}",
-                    world.seed,
-                    world.stream.player_spawn
-                );
-                runtime.world = Some(world);
-                runtime.shapes.clear();
-                runtime.shape_ids.clear();
-                runtime.was_alive = false;
+                let spawn = world.stream.player_spawn;
+                install(&mut runtime, &mut view, world, spawn, None);
+                sim::voxel::activate(authority.0.content().clip_brushes(), view.origin, vec![Vec::new()]);
             }
             Err(error) => {
                 diag::warn!(World, "Minecraft world failed to load: {error}");
                 view.active = false;
+            }
+        }
+    }
+
+    // The console's `dimension` command: straight to that dimension's spawn.
+    if let Some(to) = ui.travel_request.take() {
+        let to = match to.as_str() {
+            "nether" => Dimension::Nether,
+            "end" => Dimension::End,
+            _ => Dimension::Overworld,
+        };
+        runtime.travel = Some(Travel { to, portal: false });
+    }
+
+    // A trip to another dimension: the world is replaced, and the player
+    // keeps what they carry and comes out on the far side.
+    if let Some(travel) = runtime.travel.take()
+        && let Some(dir) = runtime.world_dir.clone()
+        && let Some(from) = runtime.world.take()
+    {
+        let here = from.dimension;
+        let target = travel.portal.then(|| {
+            let [x, y, z] = runtime.last_feet;
+            // The Nether is an eighth the Overworld's size across.
+            let scale = match (here, travel.to) {
+                (Dimension::Overworld, Dimension::Nether) => 0.125,
+                (Dimension::Nether, Dimension::Overworld) => 8.0,
+                _ => 1.0,
+            };
+            ((x * scale).floor() as i32, y.floor() as i32, (z * scale).floor() as i32)
+        });
+        let keep = runtime.entities.take().map(|mut e| (std::mem::take(&mut e.inventory), e.selected));
+        match switch_dimension(from, travel.to, &dir, target) {
+            Ok((world, feet)) => {
+                diag::info!(World, "Minecraft travel: {here:?} to {:?}, arriving at {feet:?}", travel.to);
+                install(&mut runtime, &mut view, world, feet, keep);
+                sim::voxel::activate(authority.0.content().clip_brushes(), view.origin, vec![Vec::new()]);
+                runtime.portal.cooldown = travel.portal;
+            }
+            Err(error) => {
+                diag::warn!(World, "Minecraft travel failed: {error}");
+                stop(&mut runtime, &mut view);
+                return;
             }
         }
     }
@@ -416,11 +569,18 @@ fn update(
         hand,
         minimap,
         steps,
+        containers,
+        portal,
+        travel,
+        last_feet,
+        died_away,
+        dragon,
         ..
     } = &mut *runtime;
     let Some(world) = world.as_mut() else {
         ui.active = false;
         ui.inventory_open = false;
+        ui.screen = frame::McScreen::Inventory;
         puppet.active = false;
         return;
     };
@@ -433,6 +593,15 @@ fn update(
     // Every spawn lands on the Minecraft spawn once its ground exists.
     let alive = ps.pm_type == 0;
     let spawn_chunk = ((origin[0].floor() as i32) >> 4, (origin[2].floor() as i32) >> 4);
+    if !alive && world.dimension != Dimension::Overworld {
+        *died_away = true;
+    }
+    if alive && *died_away {
+        // A respawn is at the Overworld's spawn, wherever the player died.
+        *died_away = false;
+        *travel = Some(Travel { to: Dimension::Overworld, portal: false });
+        return;
+    }
     if alive && !*was_alive && world.scene.generated_chunk(spawn_chunk).is_some() {
         // Retried each frame until the authority has the player to move.
         if authority.0.teleport(local.0, [0.0, 0.0, 0.0]) {
@@ -577,9 +746,76 @@ fn update(
     hand.clock += dt_hand;
     let hand_ticks = (hand.clock / TICK_SECONDS) as u32;
     hand.clock -= f64::from(hand_ticks) * TICK_SECONDS;
+    // Using a block, as vanilla's use does: the right click (LT) with a hand
+    // or an item, or F (MW2's use) with a gun. A crafting table, furnace or
+    // chest opens its screen; flint and steel lights a portal frame; doors,
+    // gates, levers and buttons go to the level; otherwise the click places.
+    let mut used_block = false;
+    if alive && !ui.inventory_open && entities.is_some() {
+        let with_hand = ui.holding_item
+            && (buttons.just_pressed(MouseButton::Right) || pad_trigger(pad, GamepadButton::LeftTrigger2, true));
+        let sneaking = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ControlLeft);
+        if (with_hand && !sneaking) || keys.just_pressed(KeyCode::KeyF) {
+            let mut player = minecraftoss_player::Player::new(glam::DVec3::from_array(feet));
+            player.yaw = f64::from(mc_yaw);
+            player.pitch = f64::from(ps.viewangles[0]);
+            if let Some(hit) = player.target(&world.scene, 4.5)
+                && let Some(block) = minecraft_terrain::scene::Scene::block(&world.scene, hit.pos).cloned()
+                && let Some(entities) = entities.as_mut()
+            {
+                let path = block.id.path.as_str();
+                let held = entities.inventory.slots[entities.selected].as_ref().map(|s| s.id.clone());
+                let dim = dimension_index(world.dimension);
+                if path == "crafting_table" {
+                    ui.screen = frame::McScreen::Workbench;
+                    ui.inventory_open = true;
+                    used_block = true;
+                } else if let Some(screen) = containers.open((dim, hit.pos), path) {
+                    ui.screen = screen;
+                    ui.inventory_open = true;
+                    used_block = true;
+                } else if with_hand
+                    && matches!(held.as_deref(), Some("minecraft:flint_and_steel" | "minecraft:fire_charge"))
+                {
+                    let (ox, oy, oz) = hit.face.offset();
+                    let fire = (hit.pos.0 + ox, hit.pos.1 + oy, hit.pos.2 + oz);
+                    let name = |p| {
+                        minecraft_terrain::scene::Scene::block(&world.scene, p).map_or_else(String::new, |b| b.id.path.clone())
+                    };
+                    if let Some((inside, axis)) = crate::minecraft_portal::light(name, fire) {
+                        for pos in inside {
+                            set_block(world, Some(&mut *entities), shapes, shape_ids, pos, Some(crate::minecraft_portal::portal_block(axis)));
+                        }
+                        if held.as_deref() == Some("minecraft:fire_charge")
+                            && let Some(stack) = entities.inventory.slots[entities.selected].as_mut()
+                        {
+                            stack.count -= 1;
+                            if stack.count == 0 {
+                                entities.inventory.slots[entities.selected] = None;
+                            }
+                        }
+                        if let Some(sounds) = sounds.as_mut() {
+                            let centre = [fire.0 as f64 + 0.5, fire.1 as f64 + 0.5, fire.2 as f64 + 0.5];
+                            sounds.play(&world.packs, "minecraft:item.flintandsteel.use", Some(Vec3::from_array(sim::voxel::to_map(origin, centre))), 1.0, 1.0);
+                        }
+                    }
+                    used_block = true;
+                } else {
+                    // Vanilla's `Direction.fromYRot`: 0 faces south.
+                    let facing = ["south", "west", "north", "east"][((mc_yaw / 90.0 + 0.5).floor() as i32).rem_euclid(4) as usize];
+                    used_block = entities.use_block(&world.scene, hit.pos, facing);
+                }
+                if used_block {
+                    hand.swing = Some(0.0);
+                    hand.place_delay = 4;
+                }
+            }
+        }
+    }
     if let Some(entities) = entities.as_mut()
         && ui.holding_item
         && !ui.inventory_open
+        && !used_block
     {
         let mut player = minecraftoss_player::Player::new(glam::DVec3::from_array(feet));
         player.yaw = f64::from(mc_yaw);
@@ -675,10 +911,15 @@ fn update(
     let (mob_shots, events): (Vec<_>, Vec<_>) = all_events
         .into_iter()
         .partition(|event| matches!(event, sim::voxel::VoxelEvent::MobShot { .. }));
+    let mut fight_effects = Vec::new();
     if let Some(entities) = entities.as_mut() {
         for shot in mob_shots {
             if let sim::voxel::VoxelEvent::MobShot { key, damage, from } = shot {
-                entities.shoot(key, damage, from, mc_yaw);
+                if crate::minecraft_dragon::Fight::owns(key) {
+                    fight_effects.push(dragon.shot(key, damage, glam::DVec3::from_array(feet)));
+                } else {
+                    entities.shoot(key, damage, from, mc_yaw);
+                }
             }
         }
     }
@@ -732,6 +973,113 @@ fn update(
         let positions: Vec<_> = broken.iter().map(|(pos, ..)| *pos).collect();
         entities.broke(&world.scene, &positions);
         entities.drop_blocks(&broken);
+    }
+
+    // A broken furnace or chest spills what it held; a broken frame or
+    // portal block takes the rest of the portal with it.
+    let dim = dimension_index(world.dimension);
+    for (pos, block, _) in &broken {
+        let contents = containers.remove((dim, *pos));
+        if let Some(entities) = entities.as_mut()
+            && !contents.is_empty()
+        {
+            entities.spill(*pos, contents);
+        }
+        if matches!(block.id.path.as_str(), "obsidian" | "nether_portal") {
+            let name = |p| minecraft_terrain::scene::Scene::block(&world.scene, p).map_or_else(String::new, |b| b.id.path.clone());
+            let mut gone = Vec::new();
+            for (dx, dy, dz) in crate::minecraft_portal::NEIGHBOURS {
+                let next = (pos.0 + dx, pos.1 + dy, pos.2 + dz);
+                if name(next) == "nether_portal" {
+                    gone.extend(crate::minecraft_portal::connected(name, next));
+                }
+            }
+            for p in gone {
+                set_block(world, entities.as_mut(), shapes, shape_ids, p, None);
+            }
+        }
+    }
+
+    // Furnaces burn and cook each tick, lit furnaces showing it; and a
+    // player standing in a portal long enough goes through.
+    if let Some(entities) = entities.as_mut() {
+        let recipes = entities.inventory.recipes.clone();
+        for _ in 0..hand_ticks {
+            for (pos, lit) in containers.tick(&recipes, dim) {
+                if let Some(mut block) = minecraft_terrain::scene::Scene::block(&world.scene, pos).cloned()
+                    && crate::minecraft_containers::kind_of(&block.id.path) == Some(frame::McScreen::Furnace)
+                {
+                    block.properties.insert("lit".into(), lit.to_string());
+                    set_block(world, Some(&mut *entities), shapes, shape_ids, pos, Some(block));
+                }
+            }
+        }
+    }
+    let in_portal = alive
+        && [0.1, 1.0].into_iter().any(|dy| {
+            let at = (feet[0].floor() as i32, (feet[1] + dy).floor() as i32, feet[2].floor() as i32);
+            minecraft_terrain::scene::Scene::block(&world.scene, at).is_some_and(|b| b.id.path == "nether_portal")
+        });
+    if portal.step(in_portal, hand_ticks) && world.dimension != Dimension::End {
+        let to = if world.dimension == Dimension::Overworld { Dimension::Nether } else { Dimension::Overworld };
+        *travel = Some(Travel { to, portal: true });
+    }
+    // An end portal takes the player at once: to the End, or out of it to
+    // the Overworld's spawn.
+    let in_end_portal = alive
+        && minecraft_terrain::scene::Scene::block(&world.scene, (feet[0].floor() as i32, (feet[1] + 0.1).floor() as i32, feet[2].floor() as i32))
+            .is_some_and(|b| b.id.path == "end_portal");
+    if in_end_portal && travel.is_none() {
+        let to = if world.dimension == Dimension::End { Dimension::Overworld } else { Dimension::End };
+        *travel = Some(Travel { to, portal: false });
+    }
+    *last_feet = feet;
+
+    // The dragon fight, in the End: set up once the island's centre has
+    // generated, then its tick and what it does to the world and player.
+    ui.boss = None;
+    if world.dimension != Dimension::End {
+        ui.dragon_request = None;
+    }
+    if world.dimension == Dimension::End {
+        if !dragon.started() && world.scene.generated_chunk((0, 0)).is_some() {
+            let top = (0..200)
+                .rev()
+                .find(|&y| minecraft_terrain::scene::Scene::block(&world.scene, (0, y, 0)).is_some_and(|b| b.id.path == "end_stone"))
+                .map_or(64, |y| y + 1);
+            fight_effects.push(dragon.start(world.seed, top));
+            diag::info!(World, "Ender dragon fight: podium at y {top}");
+        }
+        match ui.dragon_request.take().as_deref() {
+            Some("kill") if dragon.started() => {
+                let mut fx = crate::minecraft_dragon::Effects::default();
+                dragon.kill(&mut fx);
+                fight_effects.push(fx);
+            }
+            Some("reset") if dragon.started() => fight_effects.push(dragon.reset(world.seed)),
+            _ => {}
+        }
+        if dragon.started() {
+            let player = alive.then(|| glam::DVec3::from_array(feet));
+            let scene = &world.scene;
+            fight_effects.push(dragon.update(time.delta_secs_f64(), player, |p| {
+                minecraft_terrain::scene::Scene::block(scene, p).is_some_and(|b| b.is_opaque())
+            }));
+            ui.boss = dragon.boss();
+        }
+    }
+    for fx in fight_effects {
+        for (amount, from) in fx.damage {
+            sim::voxel::push_player_damage(local.0.0, amount, Some(sim::voxel::to_map(origin, from.to_array())));
+        }
+        if let Some(sounds) = sounds.as_mut() {
+            for (event, at, volume, pitch) in fx.sounds {
+                sounds.play(&world.packs, event, Some(Vec3::from_array(sim::voxel::to_map(origin, at.to_array()))), volume, pitch);
+            }
+        }
+        for (pos, block) in fx.edits {
+            set_block(world, entities.as_mut(), shapes, shape_ids, pos, block);
+        }
     }
 
     let eye = sim::voxel::to_block(origin, [ps.origin[0], ps.origin[1], ps.origin[2] + ps.view_height_current]);
@@ -848,10 +1196,14 @@ fn update(
         ui.active = alive;
         if !alive {
             ui.inventory_open = false;
+            ui.screen = frame::McScreen::Inventory;
         }
         inventory_ui.sync_weapons(&mut entities.inventory, &owned);
         let mut selected = entities.selected;
-        let thrown = inventory_ui.apply_input(&mut ui, &mut entities.inventory, &mut selected);
+        let thrown = inventory_ui.apply_input(&mut ui, &mut entities.inventory, &mut selected, containers);
+        if !ui.inventory_open {
+            containers.close();
+        }
         let thrower = crate::minecraft_inventory::Thrower {
             eye: glam::DVec3::from_array(eye),
             yaw: mc_yaw,
@@ -860,7 +1212,7 @@ fn update(
         crate::minecraft_inventory::throw(&mut entities.world_items, thrown, &thrower);
         ui.weapon_request = inventory_ui.weapon_request(&entities.inventory, &mut selected, ps.weapon as u32);
         entities.selected = selected;
-        inventory_ui.publish(&mut ui, &entities.inventory, selected, &world.packs, &mut images);
+        inventory_ui.publish(&mut ui, &entities.inventory, selected, &world.packs, &mut images, containers);
 
         if let Some(sounds) = sounds.as_mut() {
             for (event, position, volume, pitch) in std::mem::take(&mut entities.sounds) {
@@ -897,10 +1249,14 @@ fn update(
             .to_cols_array();
         }
 
-        sim::voxel::set_mob_boxes(entities.boxes());
+        let mut boxes = entities.boxes();
+        if world.dimension == Dimension::End {
+            boxes.extend(dragon.boxes());
+        }
+        sim::voxel::set_mob_boxes(boxes);
         entities.tick_scene(&world.scene, mob_ticks);
         let sky_darken = (15.0 - world.environment.sky_light_level()).clamp(0.0, 15.0) as u8;
-        let meshes = entities.meshes(
+        let mut meshes = entities.meshes(
             &world.scene,
             &world.packs,
             &world.atlas,
@@ -909,6 +1265,9 @@ fn update(
             glam::DVec3::from_array(eye),
             sky_darken,
         );
+        if world.dimension == Dimension::End {
+            dragon.append_meshes(&mut meshes.models, &mut meshes.translucent, &world.atlas);
+        }
         let raw = |mesh: &minecraft_terrain::mesh::ChunkMesh| {
             (bytemuck::cast_slice::<_, u8>(&mesh.vertices).to_vec(), mesh.indices.clone())
         };
@@ -1068,7 +1427,112 @@ fn update(
     }
 }
 
+/// The collision shape id of a block state, made on first sight.
+fn shape_of(
+    state: Option<BlockStateId>,
+    registries: &Registries,
+    shapes: &mut HashMap<BlockStateId, u16>,
+    shape_ids: &mut HashMap<Vec<[u32; 6]>, u16>,
+) -> u16 {
+    let Some(state) = state else { return 0 };
+    *shapes.entry(state).or_insert_with(|| {
+        let boxes = registries.blocks.collision_boxes(state);
+        if boxes.is_empty() {
+            return 0;
+        }
+        let key: Vec<[u32; 6]> = boxes.iter().map(|b| b.map(|v| (v as f32).to_bits())).collect();
+        if let Some(&id) = shape_ids.get(&key) {
+            return id;
+        }
+        let boxes32 = boxes.iter().map(|b| b.map(|v| v as f32)).collect();
+        let id = sim::voxel::add_shapes(vec![boxes32]).unwrap_or(0);
+        shape_ids.insert(key, id);
+        id
+    })
+}
+
+/// A block the game itself changed (a portal lit or gone, a furnace lit):
+/// the scene, its collision, the chunk store, the section meshes and the
+/// mob server's level.
+fn set_block(
+    world: &mut Loaded,
+    entities: Option<&mut crate::minecraft_entities::Entities>,
+    shapes: &mut HashMap<BlockStateId, u16>,
+    shape_ids: &mut HashMap<Vec<[u32; 6]>, u16>,
+    pos: (i32, i32, i32),
+    block: Option<minecraft_terrain::scene::Block>,
+) {
+    let state = block.as_ref().and_then(|b| world.stream.states.state_of(b));
+    let placed = block.is_some();
+    world.scene.set(pos, block);
+    let shape = shape_of(state, &world.registries, shapes, shape_ids);
+    sim::voxel::set_block_shape(pos.0, pos.1, pos.2, shape);
+    world.stream.record_edits(&world.scene, &[pos]);
+    world.stream.mark_edited(&world.scene, &[pos]);
+    if let Some(entities) = entities {
+        if placed {
+            entities.placed(&world.scene, pos);
+        } else {
+            entities.broke(&world.scene, &[pos]);
+        }
+    }
+}
+
+/// Puts a loaded world in play with the player's feet at map origin: the
+/// renderer starts over, and a new mob and item server runs for its
+/// dimension. `keep` is the inventory and hotbar slot carried in.
+fn install(
+    runtime: &mut Runtime,
+    view: &mut MinecraftWorldView,
+    world: Loaded,
+    (x, y, z): (f64, f64, f64),
+    keep: Option<(minecraftoss_player::inventory::Inventory, usize)>,
+) {
+    view.origin = [x, y, z];
+    view.atlas = Some(world.atlas.clone());
+    view.celestial = Some(world.celestial.clone());
+    view.crack_texture = Some(world.crack_texture.clone());
+    view.uploads.clear();
+    view.removed.clear();
+    view.visible.clear();
+    view.clouds = None;
+    view.light_volume = None;
+    view.generation += 1;
+    runtime.mining = Default::default();
+    runtime.minimap = Default::default();
+    runtime.steps = Default::default();
+    if runtime.sounds.is_none() {
+        runtime.sounds = Some(crate::minecraft_sounds::Sounds::load(&world.packs));
+    }
+    let mut entities = crate::minecraft_entities::Entities::new(&world.stream, world.seed, world.dimension.dimension_type());
+    if let Some((inventory, selected)) = keep {
+        entities.inventory = inventory;
+        entities.selected = selected;
+    }
+    runtime.entities = Some(entities);
+    runtime.environment_accumulator = 0.0;
+    runtime.environment_primed = false;
+    runtime.light = Some(SkyLight::streamed());
+    runtime.light_volume_at = None;
+    runtime.cloud_center = None;
+    runtime.containers.close();
+    diag::info!(World, "Minecraft world ready: seed {} {:?} at {:?}", world.seed, world.dimension, (x, y, z));
+    runtime.world = Some(world);
+    runtime.shapes.clear();
+    runtime.shape_ids.clear();
+    runtime.was_alive = false;
+}
+
 fn stop(runtime: &mut Runtime, view: &mut MinecraftWorldView) {
+    runtime.entities = None;
+    runtime.travel = None;
+    runtime.containers = Default::default();
+    runtime.dragon = Default::default();
+    if let Some(dir) = runtime.world_dir.take() {
+        // Streams and their savers stop first.
+        runtime.world = None;
+        let _ = std::fs::remove_dir_all(dir);
+    }
     if runtime.world.take().is_some() || runtime.loading.take().is_some() || view.active {
         sim::voxel::deactivate();
         view.active = false;
