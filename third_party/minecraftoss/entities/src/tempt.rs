@@ -24,6 +24,9 @@ pub struct PlayerCandidate {
     pub alive: bool,
     pub spectator: bool,
     pub attackable: bool,
+    /// Any armour slot holds `#piglin_safe_armor` (a golden helmet,
+    /// chestplate, leggings or boots): `PiglinAi.isWearingSafeArmor`.
+    pub wears_gold: bool,
 }
 
 #[derive(Clone, Debug, Default)]

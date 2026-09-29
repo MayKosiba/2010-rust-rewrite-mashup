@@ -47,6 +47,11 @@ pub(crate) struct Entities {
     ticks: u64,
     /// The player's inventory: vanilla slots, stacking and recipes.
     pub(crate) inventory: Inventory,
+    /// Containers' and bartering's loot tables, rolled on this side.
+    container_loot: Option<minecraftoss_entities::loot::EntityLootBook>,
+    /// Piglins studying gold they were given: the piglin and the ticks left
+    /// (`PiglinAi.admireGoldItem`: 120).
+    barters: Vec<(u64, u32)>,
     /// The selected hotbar slot.
     pub(crate) selected: usize,
     /// Item entities as the client shows them: the server's, and drops the
@@ -111,6 +116,23 @@ impl Entities {
             server.load_loot(jar.clone(), seed as u64);
             match minecraftoss_player::crafting::RecipeBook::from_jar(&jar) {
                 Ok(recipes) => {
+                    // The item catalog: every item's fuel value, stack size and
+                    // crafting remainder. Without it only a few oak items and
+                    // coal burned, and every item stacked to 64.
+                    let catalog = assets::minecraft_map::root().map(|root| root.join("artifacts/item-catalog/26.3.json"));
+                    let recipes = match catalog.filter(|path| path.is_file()) {
+                        Some(path) => match minecraftoss_player::item_catalog::ItemCatalog::from_path(&path) {
+                            Ok(catalog) => recipes.with_item_catalog(std::sync::Arc::new(catalog)),
+                            Err(error) => {
+                                diag::warn!(World, "Minecraft item catalog unreadable: {error:#}");
+                                recipes
+                            }
+                        },
+                        None => {
+                            diag::warn!(World, "Minecraft item catalog not found: few fuels, 64-stacks");
+                            recipes
+                        }
+                    };
                     let recipes = std::sync::Arc::new(recipes);
                     server.set_recipe_book(recipes.clone());
                     inventory.recipes = recipes;
@@ -124,7 +146,16 @@ impl Entities {
         } else {
             diag::warn!(World, "Minecraft data JAR not found: no loot or recipes");
         }
+        let container_loot = data_jar().and_then(|jar| match minecraftoss_entities::loot::EntityLootBook::from_jar(&jar, seed as u64) {
+            Ok(book) => Some(book),
+            Err(error) => {
+                diag::warn!(World, "Minecraft container loot unavailable: {error:#}");
+                None
+            }
+        });
         Self {
+            container_loot,
+            barters: Vec::new(),
             server,
             world: EntityWorld::default(),
             client: ClientMobs::default(),
@@ -166,6 +197,84 @@ impl Entities {
     /// buttons); false for any other block.
     pub(crate) fn use_block(&mut self, scene: &HandcraftedScene, pos: (i32, i32, i32), facing: &'static str) -> bool {
         self.server.use_block(scene, pos, facing)
+    }
+
+    /// The worn armour's points and toughness (the armour slots' items'
+    /// `minecraft:armor` and `minecraft:armor_toughness` modifiers).
+    pub(crate) fn armor(&self) -> (f32, f32) {
+        let Some(catalog) = self.inventory.recipes.item_catalog() else { return (0.0, 0.0) };
+        let (mut armor, mut toughness) = (0.0, 0.0);
+        for stack in self.inventory.slots[36..40].iter().flatten() {
+            let Some(item) = catalog.get(&stack.id) else { continue };
+            for modifier in &item.attribute_modifiers {
+                match modifier.attribute.as_str() {
+                    "minecraft:armor" => armor += modifier.amount,
+                    "minecraft:armor_toughness" => toughness += modifier.amount,
+                    _ => {}
+                }
+            }
+        }
+        (armor as f32, toughness as f32)
+    }
+
+    /// Minecraft damage to the player after its worn armour.
+    pub(crate) fn after_armor(&self, damage: f32) -> f32 {
+        let (armor, toughness) = self.armor();
+        minecraftoss_entities::health::damage_after_armor(damage, armor, toughness)
+    }
+
+    /// Gold offered to the piglin the player looks at (`Piglin.mobInteract`
+    /// with a gold ingot): an adult piglin not already studying something
+    /// takes it and admires it for six seconds, then barters. Returns whether
+    /// one took it.
+    pub(crate) fn offer_gold(&mut self, eye: DVec3, look: DVec3) -> bool {
+        use minecraftoss_entities::world::MobHit;
+        use minecraftoss_entities::zombie::ZombieKind;
+        let Some((MobHit::Zombie(id), _)) = self.world.mob_on_ray(eye, look, 4.0) else { return false };
+        let Some(piglin) = self.world.zombies().iter().find(|e| e.id == id) else { return false };
+        if piglin.zombie.kind != ZombieKind::Piglin || piglin.zombie.baby || self.barters.iter().any(|(p, _)| *p == id) {
+            return false;
+        }
+        let at = piglin.zombie.body.position;
+        self.barters.push((id, 120));
+        diag::info!(World, "Piglin {id} took gold");
+        self.sounds.push(("minecraft:entity.piglin.admiring_item".to_owned(), at, 1.0, 1.0));
+        true
+    }
+
+    /// A tick of the piglins admiring gold: when one is done it tosses out a
+    /// roll of `gameplay/piglin_bartering` (`PiglinAi.throwItems`); one that
+    /// died or left keeps nothing.
+    fn tick_barters(&mut self) {
+        let mut done = Vec::new();
+        self.barters.retain_mut(|(id, left)| {
+            *left = left.saturating_sub(1);
+            if *left == 0 {
+                done.push(*id);
+                false
+            } else {
+                true
+            }
+        });
+        for id in done {
+            let Some(at) = self.world.zombies().iter().find(|e| e.id == id && e.zombie.health > 0.0).map(|e| e.zombie.body.position) else { continue };
+            let items = self.roll_gameplay("minecraft:gameplay/piglin_bartering");
+            diag::info!(World, "Piglin bartered: {}", items.iter().map(|s| format!("{} {}", s.count, s.id)).collect::<Vec<_>>().join(", "));
+            let block = (at.x.floor() as i32, (at.y + 0.5).floor() as i32, at.z.floor() as i32);
+            self.spill(block, items);
+        }
+    }
+
+    /// A structure container's loot (`chests/...`) rolled from its seed into
+    /// `slots` slots.
+    pub(crate) fn roll_container(&self, table: &str, seed: i64, slots: usize) -> Vec<Option<ItemStack>> {
+        self.container_loot.as_ref().map_or_else(|| vec![None; slots], |book| book.roll_container(table, seed, slots))
+    }
+
+    /// One roll of a gameplay table (`gameplay/piglin_bartering`).
+    pub(crate) fn roll_gameplay(&mut self, table: &str) -> Vec<ItemStack> {
+        let mut random = minecraftoss_player::rng::LegacyRandom::new(self.random.next_int(1 << 30) as u64 ^ self.ticks);
+        self.container_loot.as_ref().map_or_else(Vec::new, |book| book.roll_gameplay(table, &mut random))
     }
 
     /// The console's `summon`: a mob of `kind` at `position`, facing `yaw`.
@@ -397,9 +506,9 @@ impl Entities {
             self.portal.tick();
             if self.ticks % 600 == 0 {
                 // By kind, with the nearest of each, to see where they are.
-                const KINDS: [&str; 16] = [
+                const KINDS: [&str; 17] = [
                     "bat", "zombie", "skeleton", "creeper", "spider", "slime", "enderman", "witch",
-                    "iron_golem", "wolf", "villager", "cow", "mooshroom", "sheep", "pig", "chicken",
+                    "iron_golem", "wolf", "villager", "cow", "mooshroom", "sheep", "pig", "chicken", "blaze",
                 ];
                 let boxes = self.boxes();
                 let mut kinds: std::collections::BTreeMap<&str, (usize, f64)> = Default::default();
@@ -434,6 +543,14 @@ impl Entities {
                 alive: player.alive,
                 spectator: !player.alive,
                 attackable: player.alive,
+                // `PiglinAi.isWearingSafeArmor`: any armour slot holding
+                // `#piglin_safe_armor`.
+                wears_gold: self.inventory.slots[36..40].iter().flatten().any(|stack| {
+                    matches!(
+                        stack.id.as_str(),
+                        "minecraft:golden_helmet" | "minecraft:golden_chestplate" | "minecraft:golden_leggings" | "minecraft:golden_boots"
+                    )
+                }),
             };
             self.server.tick(TickInput {
                 day_ticks,
@@ -497,10 +614,13 @@ impl Entities {
                     PlayerHitKind::Melee { attacker, .. } => Some(attacker.to_array()),
                     _ => None,
                 };
-                hits.push(((hit.damage / HEALTH_SCALE).round() as i32, from));
+                // Worn armour first (`LivingEntity.getDamageAfterArmorAbsorb`).
+                let damage = self.after_armor(hit.damage);
+                hits.push(((damage / HEALTH_SCALE).round() as i32, from));
             }
         }
         if ticked {
+            self.tick_barters();
             self.server_items_tick(DVec3::from_array(player.feet));
             // `ItemEntity.playerTouch`'s pickup pop.
             for _ in 0..self.world_items.take_pickup_sounds() {
@@ -540,6 +660,9 @@ impl Entities {
         }
         for e in w.slimes().iter().filter(|e| e.slime.health > 0.0) {
             add(MobHit::Slime(e.id), &e.slime.body);
+        }
+        for e in w.blazes().iter().filter(|e| e.blaze.health > 0.0) {
+            add(MobHit::Blaze(e.id), &e.blaze.body);
         }
         for e in w.endermen().iter().filter(|e| e.enderman.health > 0.0) {
             add(MobHit::Enderman(e.id), &e.enderman.body);
@@ -618,6 +741,11 @@ impl Entities {
         );
         horse_render::append_horses(&mut out.models, &mut out.translucent, w.cows().iter(), poses, atlas, light, partial);
         slime_render::append_slimes(&mut out.models, &mut out.translucent, w.slimes().iter(), poses, atlas, light, partial);
+        blaze_render::append_blazes(&mut out.models, w.blazes().iter(), poses, atlas, light, partial);
+        for ball in w.blaze_fireballs() {
+            let at = ball.previous_position.lerp(ball.position, f64::from(partial));
+            dragon_render::append_small_fireball(&mut out.items, at, ball.age as f32 + partial, atlas);
+        }
         let carried = enderman_render::append_endermen(
             &mut out.models,
             w.endermen().iter(),
@@ -718,6 +846,7 @@ fn encode(hit: MobHit) -> u64 {
         MobHit::Sheep(_) => 13,
         MobHit::Pig(_) => 14,
         MobHit::Chicken(_) => 15,
+        MobHit::Blaze(_) => 16,
     };
     (kind << 56) | (hit.id() & ((1 << 56) - 1))
 }
@@ -741,6 +870,7 @@ fn decode(key: u64) -> Option<MobHit> {
         13 => MobHit::Sheep(id),
         14 => MobHit::Pig(id),
         15 => MobHit::Chicken(id),
+        16 => MobHit::Blaze(id),
         _ => return None,
     })
 }

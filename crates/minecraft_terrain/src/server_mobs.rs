@@ -522,14 +522,20 @@ pub fn spawn_saved(world: &mut EntityWorld, tag: &Tag) -> Option<u64> {
         }
         // Monsters and bats natural spawning makes. Riders (jockeys) wait
         // dormant with their vehicle.
-        "minecraft:zombie" | "minecraft:husk" | "minecraft:zombie_villager" | "minecraft:zombified_piglin" if tag.get("Passengers").is_none() => {
+        "minecraft:zombie" | "minecraft:husk" | "minecraft:zombie_villager" | "minecraft:zombified_piglin" | "minecraft:piglin" | "minecraft:piglin_brute"
+            if tag.get("Passengers").is_none() =>
+        {
             let mut zombie = minecraftoss_entities::zombie::Zombie::new(pos);
             zombie.kind = match kind {
                 "minecraft:husk" => ZombieKind::Husk,
                 "minecraft:zombified_piglin" => ZombieKind::ZombifiedPiglin,
                 "minecraft:zombie_villager" => ZombieKind::ZombieVillager,
+                "minecraft:piglin" => ZombieKind::Piglin,
+                "minecraft:piglin_brute" => ZombieKind::PiglinBrute,
                 _ => ZombieKind::Zombie,
             };
+            // `createAttributes`' max health: a piglin's 16, a brute's 50.
+            zombie.health = zombie.kind.max_health();
             if zombie.kind == ZombieKind::ZombieVillager {
                 let data = tag.get("VillagerData");
                 let field = |key: &str, default: &str| data.and_then(|d| text(d, key)).unwrap_or(default).to_owned();
@@ -537,6 +543,17 @@ pub fn spawn_saved(world: &mut EntityWorld, tag: &Tag) -> Option<u64> {
             }
             zombie.head_item = head_item(tag);
             zombie.main_hand = tag.get("equipment").and_then(|e| e.get("mainhand")).and_then(|i| i.get("id")).and_then(Tag::as_str).map(str::to_owned);
+            // A bastion's piglins come armed by their `finalizeSpawn`
+            // (`Piglin.createSpawnWeapon`, `PiglinBrute`'s golden axe) when
+            // the template's tag names none. Simplified: never a crossbow
+            // (vanilla's 50%), and an adult's own.
+            if zombie.main_hand.is_none() {
+                zombie.main_hand = match zombie.kind {
+                    ZombieKind::Piglin if int(tag, "IsBaby").unwrap_or(0) == 0 => Some("minecraft:golden_sword".to_owned()),
+                    ZombieKind::PiglinBrute => Some("minecraft:golden_axe".to_owned()),
+                    _ => None,
+                };
+            }
             zombie.armor = armor_slots(tag);
             zombie.set_baby(int(tag, "IsBaby").unwrap_or(0) != 0);
             zombie.can_break_doors = int(tag, "CanBreakDoors").unwrap_or(0) != 0;
@@ -620,6 +637,17 @@ pub fn spawn_saved(world: &mut EntityWorld, tag: &Tag) -> Option<u64> {
             if let Some(range) = attribute_value(tag, "minecraft:follow_range") {
                 entity.ai.state.follow_range = range;
             }
+            id
+        }
+        "minecraft:blaze" => {
+            let mut blaze = minecraftoss_entities::blaze::Blaze::new(pos);
+            blaze.yaw = yaw;
+            blaze.persistence_required = persistent;
+            if let Some(health) = health {
+                blaze.health = health;
+            }
+            let id = world.spawn_blaze(blaze, no_ai);
+            world.blaze_mut(id)?.random = random;
             id
         }
         "minecraft:slime" | "minecraft:magma_cube" => {
@@ -1110,6 +1138,9 @@ pub fn mob_tags(world: &EntityWorld, keep: impl Fn(DVec3) -> bool, originals: &s
     }
     for e in world.spiders() {
         add(e.id, "minecraft:spider", &e.spider.body, e.spider.yaw, e.spider.health, e.spider.persistence_required, Vec::new());
+    }
+    for e in world.blazes() {
+        add(e.id, "minecraft:blaze", &e.blaze.body, e.blaze.yaw, e.blaze.health, e.blaze.persistence_required, Vec::new());
     }
     for e in world.villagers() {
         let v = &e.villager;

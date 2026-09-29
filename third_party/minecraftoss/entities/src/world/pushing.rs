@@ -164,6 +164,7 @@ impl EntityWorld {
                 .map(|e| (&mut e.creeper.body, e.creeper.health > 0.0 && !e.creeper.exploded)),
             EntityKey::Spider(id) => self.spiders.iter_mut().find(|e| e.id == id).map(|e| (&mut e.spider.body, e.spider.health > 0.0)),
             EntityKey::Slime(id) => self.slimes.iter_mut().find(|e| e.id == id).map(|e| (&mut e.slime.body, e.slime.health > 0.0)),
+            EntityKey::Blaze(id) => self.blazes.iter_mut().find(|e| e.id == id).map(|e| (&mut e.blaze.body, e.blaze.health > 0.0)),
             EntityKey::Enderman(id) => self.endermen.iter_mut().find(|e| e.id == id).map(|e| (&mut e.enderman.body, e.enderman.health > 0.0)),
             EntityKey::Witch(id) => self.witches.iter_mut().find(|e| e.id == id).map(|e| (&mut e.witch.body, e.witch.health > 0.0)),
             EntityKey::IronGolem(id) => self.iron_golems.iter_mut().find(|e| e.id == id).map(|e| (&mut e.golem.body, e.golem.health > 0.0)),
@@ -178,13 +179,14 @@ impl EntityWorld {
     }
 
     /// The mob as the hazards see it, to take cramming damage.
-    fn exposed_mut(&mut self, key: EntityKey) -> Option<&mut dyn Exposed> {
+    pub(super) fn exposed_mut(&mut self, key: EntityKey) -> Option<&mut dyn Exposed> {
         match key {
             EntityKey::Zombie(id) => self.zombies.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
             EntityKey::Skeleton(id) => self.skeletons.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
             EntityKey::Creeper(id) => self.creepers.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
             EntityKey::Spider(id) => self.spiders.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
             EntityKey::Slime(id) => self.slimes.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
+            EntityKey::Blaze(id) => self.blazes.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
             EntityKey::Enderman(id) => self.endermen.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
             EntityKey::Witch(id) => self.witches.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
             EntityKey::IronGolem(id) => self.iron_golems.iter_mut().find(|e| e.id == id).map(|e| e as &mut dyn Exposed),
@@ -314,6 +316,7 @@ impl EntityWorld {
                 EntityKey::Creeper(id) => self.creepers.iter().find(|e| e.id == id && !e.creeper.exploded).map(|e| &e.creeper.body),
                 EntityKey::Spider(id) => self.spiders.iter().find(|e| e.id == id).map(|e| &e.spider.body),
                 EntityKey::Slime(id) => self.slimes.iter().find(|e| e.id == id).map(|e| &e.slime.body),
+                EntityKey::Blaze(id) => self.blazes.iter().find(|e| e.id == id).map(|e| &e.blaze.body),
                 EntityKey::Enderman(id) => self.endermen.iter().find(|e| e.id == id).map(|e| &e.enderman.body),
                 EntityKey::Witch(id) => self.witches.iter().find(|e| e.id == id).map(|e| &e.witch.body),
                 EntityKey::IronGolem(id) => self.iron_golems.iter().find(|e| e.id == id).map(|e| &e.golem.body),
@@ -468,6 +471,7 @@ mod tests {
             alive: true,
             spectator: false,
             attackable: true,
+            wears_gold: false,
         }
     }
 

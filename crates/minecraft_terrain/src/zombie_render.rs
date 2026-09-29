@@ -79,6 +79,8 @@ pub fn append_zombies<'a>(
             (ZombieKind::ZombieVillager, _) => unreachable!("drawn by append_zombie_villager"),
             // The baby is drawn as the adult, scaled (below).
             (ZombieKind::ZombifiedPiglin, _) => "minecraft:entity/piglin/zombified_piglin",
+            (ZombieKind::Piglin, _) => "minecraft:entity/piglin/piglin",
+            (ZombieKind::PiglinBrute, _) => "minecraft:entity/piglin/piglin_brute",
         })
         .unwrap();
         let region = atlas.entity_region(&id);
@@ -87,7 +89,10 @@ pub fn append_zombies<'a>(
         let block = light.get_block(sample) as f32;
         let rotation = pose.body_rotation(90.0);
         let head = Quat::from_euler(EulerRot::ZYX, 0.0, pose.head_yaw.to_radians(), pose.head_pitch.to_radians());
-        let piglin = zombie.kind == ZombieKind::ZombifiedPiglin;
+        // `PiglinModel` draws zombified piglins, piglins and brutes alike.
+        // Simplified: their arms move as a zombie's (`ZombieLimbs`), not
+        // `PiglinModel`'s weapon poses.
+        let piglin = matches!(zombie.kind, ZombieKind::ZombifiedPiglin | ZombieKind::Piglin | ZombieKind::PiglinBrute);
         let parts = if zombie.baby && !piglin { &BABY } else { &ADULT };
         let rest = [(parts[3].3[0], parts[3].3[2]), (parts[4].3[0], parts[4].3[2])];
         let pose_limbs = limb_rotations(pose.walk_position, pose.walk_speed, pose.age_in_ticks, entity.aggressive, pose.swing, if zombie.baby && !piglin { 0.5 } else { 1.0 }, rest);

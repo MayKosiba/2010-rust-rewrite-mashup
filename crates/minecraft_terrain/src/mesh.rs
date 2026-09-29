@@ -373,12 +373,17 @@ fn build_internal<S: Scene>(scene: &S, packs: &PackStack, preload_blocks: bool) 
     let mut textures = BTreeMap::<ResourceId, ()>::new();
     // A broken chest can remain as a dropped item after its block mesh is gone.
     // Block entities this world draws from entity sheets: the end portal's
-    // stars, the dragon, the end crystals and the dragon's fireball.
+    // stars, the dragon, the end crystals and the dragon's fireball; the
+    // blaze and its fireball's fire charge sprite.
     for id in [
         "entity/end_portal/end_portal",
         "entity/piglin/zombified_piglin",
+        "entity/piglin/piglin",
+        "entity/piglin/piglin_brute",
         "entity/skeleton/wither_skeleton",
         "entity/slime/magmacube",
+        "entity/blaze/blaze",
+        "item/fire_charge",
         "entity/enderdragon/dragon",
         "entity/enderdragon/dragon_eyes",
         "entity/enderdragon/dragon_fireball",
@@ -423,6 +428,8 @@ fn build_internal<S: Scene>(scene: &S, packs: &PackStack, preload_blocks: bool) 
     textures.insert(ResourceId::parse("minecraft:entity/wolf/wolf_collar")?, ());
     textures.insert(ResourceId::parse("minecraft:entity/wolf/wolf_collar_baby")?, ());
     // Thrown splash potions: the bottle over its tinted contents.
+    // A thrown eye of ender flies as its item sprite.
+    textures.insert(ResourceId::parse("minecraft:item/ender_eye")?, ());
     textures.insert(ResourceId::parse("minecraft:item/splash_potion")?, ());
     textures.insert(ResourceId::parse("minecraft:item/potion_overlay")?, ());
     textures.insert(ResourceId::parse("minecraft:entity/zombie/husk")?, ());

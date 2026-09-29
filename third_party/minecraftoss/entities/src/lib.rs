@@ -3,6 +3,7 @@
 pub mod age;
 pub mod animal;
 pub mod bat;
+pub mod blaze;
 pub mod breed;
 pub mod chicken;
 pub mod chicken_ai;

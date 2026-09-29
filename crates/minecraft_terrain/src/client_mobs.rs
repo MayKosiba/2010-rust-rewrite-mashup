@@ -1091,6 +1091,9 @@ pub fn server_mobs(world: &minecraftoss_entities::world::EntityWorld) -> Vec<Ser
     for e in world.slimes() {
         push(e.id, e.slime.yaw, &e.ai.state.look_control, &e.slime.body, false, e.slime.eye_height());
     }
+    for e in world.blazes() {
+        push(e.id, e.blaze.yaw, &e.look_control, &e.blaze.body, false, minecraftoss_entities::blaze::EYE_HEIGHT);
+    }
     for e in world.witches() {
         push(e.id, e.witch.yaw, &e.ai.state.look_control, &e.witch.body, false, minecraftoss_entities::witch::EYE_HEIGHT);
     }
@@ -1129,6 +1132,8 @@ pub fn shadow_casters(world: &minecraftoss_entities::world::EntityWorld, mobs: &
     kinds.extend(world.endermen().iter().map(|e| (e.id, 0.5)));
     kinds.extend(world.iron_golems().iter().map(|e| (e.id, 0.7)));
     kinds.extend(world.slimes().iter().map(|e| (e.id, e.slime.size as f32 * 0.25)));
+    // `BlazeRenderer` keeps `MobRenderer`'s 0.5.
+    kinds.extend(world.blazes().iter().map(|e| (e.id, 0.5)));
     kinds.extend(world.witches().iter().map(|e| (e.id, 0.5)));
     kinds.extend(world.wolves().iter().map(|e| (e.id, 0.5 * age(e.wolf.baby()))));
     kinds

@@ -310,6 +310,7 @@ pub fn is_enemy(kind: &str) -> bool {
             | "minecraft:creeper"
             | "minecraft:spider"
             | "minecraft:slime"
+            | "minecraft:blaze"
             | "minecraft:enderman"
             | "minecraft:witch"
     )
@@ -332,6 +333,9 @@ pub struct TargetInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Prey {
     Player,
+    /// A piglin's: players wearing no golden armour
+    /// (`PiglinAi.isWearingSafeArmor`).
+    PlayerWithoutGold,
     Villager,
     /// Baby turtles on land (and endermites): none live here, so the goals
     /// only roll their interval.
@@ -738,6 +742,16 @@ impl MonsterAi {
     /// Makes a zombie a zombified piglin's: neutral until hurt.
     pub fn neutral_until_hurt(&mut self) {
         self.targets = zombified_piglin_targets();
+    }
+
+    /// Makes a zombie a piglin's: it hunts players wearing no gold.
+    pub fn hostile_unless_gold(&mut self) {
+        self.targets = piglin_targets();
+    }
+
+    /// Makes a zombie a piglin brute's: it hunts every player.
+    pub fn brute_targets(&mut self) {
+        self.targets = brute_targets();
     }
 
     pub fn of_kind(kind: MonsterKind, body: &Body, yaw: f32) -> Self {
@@ -1412,6 +1426,29 @@ pub fn zombie_goals() -> GoalSelector<MonsterGoalContext> {
 pub fn zombified_piglin_targets() -> GoalSelector<MonsterGoalContext> {
     let mut selector = GoalSelector::default();
     selector.add(1, HurtByTargetGoal { timestamp: 0, unseen_ticks: 0, target_mob: None, alert_others: true });
+    selector
+}
+
+/// `PiglinAi`'s fighting, as target goals: it avenges whoever hurts it
+/// (`PiglinAi.wasHurtBy` angers its nearby kind: `broadcastAngerTarget`)
+/// and hunts a visible player wearing no golden armour
+/// (`findNearestValidAttackTarget`'s `isWearingSafeArmor` test).
+/// Simplified: vanilla's brain (admiring gold, bartering, fleeing zombified
+/// piglins and soul fire, hunting hoglins) is left out.
+pub fn piglin_targets() -> GoalSelector<MonsterGoalContext> {
+    let mut selector = GoalSelector::default();
+    selector.add(1, HurtByTargetGoal { timestamp: 0, unseen_ticks: 0, target_mob: None, alert_others: true });
+    selector.add(2, NearestTargetGoal { interval: 5, prey: Prey::PlayerWithoutGold, must_see: true, max_dy: None, dark_only: false, candidate: None, unseen_ticks: 0, wild_only: false });
+    selector
+}
+
+/// `PiglinBruteAi.findNearestValidAttackTarget`: any visible player, gold
+/// or not, and whoever hurts it. Simplified: its brain's wither-skeleton
+/// hunting and bastion-home roaming are left out.
+pub fn brute_targets() -> GoalSelector<MonsterGoalContext> {
+    let mut selector = GoalSelector::default();
+    selector.add(1, HurtByTargetGoal { timestamp: 0, unseen_ticks: 0, target_mob: None, alert_others: true });
+    selector.add(2, NearestTargetGoal { interval: 5, prey: Prey::Player, must_see: true, max_dy: None, dark_only: false, candidate: None, unseen_ticks: 0, wild_only: false });
     selector
 }
 
@@ -2322,6 +2359,7 @@ impl Goal<MonsterGoalContext> for NearestTargetGoal {
         let (range, eye) = (ctx.follow_range.max(2.0), ctx.eye());
         let candidates: Vec<Target> = match self.prey {
             Prey::Player => ctx.players.iter().map(|p| Target::Player(p.id)).collect(),
+            Prey::PlayerWithoutGold => ctx.players.iter().filter(|p| !p.wears_gold).map(|p| Target::Player(p.id)).collect(),
             Prey::Villager => ctx.villagers.iter().map(|v| Target::Villager(v.id)).collect(),
             Prey::Absent => Vec::new(),
             Prey::Golem => ctx.mobs.iter().filter(|m| m.kind == "minecraft:iron_golem").map(|m| Target::Mob(m.id)).collect(),

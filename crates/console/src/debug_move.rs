@@ -54,10 +54,19 @@ pub(crate) fn register_debug_move_commands(registry: &mut ConsoleRegistry) {
             .arg(crate::StaticCompleter::new(["overworld", "nether", "end"])),
     );
     registry.register(
+        crate::CommandSpec::new("mcgive")
+            .usage("mcgive <item> [count] — a Minecraft item into the hotbar, selected (ender_eye, water_bucket, obsidian, ...)")
+            .arg(crate::StaticCompleter::new([
+                "ender_eye", "ender_pearl", "blaze_rod", "blaze_powder", "flint_and_steel", "obsidian", "bucket",
+                "water_bucket", "lava_bucket", "crafting_table", "furnace", "chest", "diamond_pickaxe", "iron_ingot",
+            ])),
+    );
+    registry.register(crate::CommandSpec::new("mcuse").usage("mcuse — use (right click) with the held Minecraft item"));
+    registry.register(
         crate::CommandSpec::new("summon")
             .usage("summon <mob> — a Minecraft mob in front of you (zombified_piglin, magma_cube, wither_skeleton, ...)")
             .arg(crate::StaticCompleter::new([
-                "zombified_piglin", "magma_cube", "wither_skeleton", "zombie", "skeleton", "creeper", "spider",
+                "zombified_piglin", "piglin", "piglin_brute", "magma_cube", "wither_skeleton", "zombie", "skeleton", "creeper", "spider",
                 "enderman", "slime", "witch", "cow", "pig", "sheep", "chicken", "wolf", "villager", "iron_golem",
             ])),
     );
@@ -157,6 +166,20 @@ pub(crate) fn route_debug_move_commands(
                 echo(format!("skate active={} ready={} controller={:?} tick={} {}",skate.active,skate.preloaded,skate.controller,skate.tick,skate.status),&mut console,&mut line);
             }
 
+            "mcgive" => match (cmd.args.first(), minecraft.as_deref_mut()) {
+                (Some(item), Some(ui)) if ui.active => {
+                    let id = if item.contains(':') { item.clone() } else { format!("minecraft:{item}") };
+                    let count = cmd.args.get(1).and_then(|c| c.parse::<u8>().ok()).unwrap_or(1).clamp(1, 64);
+                    echo(format!("mcgive: {count} {id}"), &mut console, &mut line);
+                    ui.give_request = Some((id, count));
+                }
+                _ => echo("usage: mcgive <item> [count] (on the Minecraft map)".into(), &mut console, &mut line),
+            },
+            "mcuse" => {
+                if let Some(ui) = minecraft.as_deref_mut() {
+                    ui.use_request = true;
+                }
+            }
             "summon" => match (cmd.args.first(), minecraft.as_deref_mut()) {
                 (Some(mob), Some(ui)) if ui.active => {
                     let id = if mob.contains(':') { mob.clone() } else { format!("minecraft:{mob}") };

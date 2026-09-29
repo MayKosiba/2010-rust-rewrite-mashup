@@ -1342,6 +1342,7 @@ mod tests {
             alive: true,
             spectator: false,
             attackable: true,
+            wears_gold: false,
         };
         let mut share = Vec::new();
         for spectator in [false, true] {
@@ -1468,6 +1469,7 @@ mod tests {
             alive: true,
             spectator: false,
             attackable: true,
+            wears_gold: false,
         };
         let monsters = |server: &ServerSim| {
             let census = server.mobs.census();
@@ -2173,6 +2175,7 @@ mod tests {
             alive: true,
             spectator: false,
             attackable: true,
+            wears_gold: false,
         };
         let mut tag = std::collections::BTreeMap::new();
         tag.insert("id".to_owned(), Tag::String("minecraft:creeper".to_owned()));

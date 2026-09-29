@@ -90,6 +90,7 @@ fn probe(id: u64, position: DVec3) -> PlayerCandidate {
         alive: true,
         spectator: false,
         attackable: true,
+        wears_gold: false,
     }
 }
 

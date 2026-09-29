@@ -2219,6 +2219,7 @@ dependencies = [
  "frame",
  "hud",
  "input_iw4",
+ "libc",
  "math_iw4",
  "net",
  "perf",

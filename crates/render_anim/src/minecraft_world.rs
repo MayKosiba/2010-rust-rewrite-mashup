@@ -183,6 +183,9 @@ struct Runtime {
     died_away: bool,
     /// The End's dragon fight, kept for the session.
     dragon: crate::minecraft_dragon::Fight,
+    /// Thrown eyes of ender, and the strongholds they seek.
+    eyes: crate::minecraft_eyes::Eyes,
+    strongholds: crate::minecraft_eyes::Strongholds,
 }
 
 /// The player's MW2 body stands in the inventory's character window, on a
@@ -575,6 +578,8 @@ fn update(
         last_feet,
         died_away,
         dragon,
+        eyes,
+        strongholds,
         ..
     } = &mut *runtime;
     let Some(world) = world.as_mut() else {
@@ -751,9 +756,27 @@ fn update(
     // chest opens its screen; flint and steel lights a portal frame; doors,
     // gates, levers and buttons go to the level; otherwise the click places.
     let mut used_block = false;
+    // The console's `mcuse` stands for a right click this frame.
+    let console_use = std::mem::take(&mut ui.use_request);
+    // The console's `mcgive`: into the first free hotbar slot, selected.
+    if let Some((id, count)) = ui.give_request.take()
+        && let Some(entities) = entities.as_mut()
+    {
+        let mut stack = minecraftoss_player::inventory::ItemStack::new(&id, count);
+        stack.max = stack.max.min(entities.inventory.recipes.max_stack(&id));
+        match (0..frame::minecraft_ui::MC_HOTBAR).find(|&i| entities.inventory.slots[i].is_none()) {
+            Some(slot) => {
+                entities.inventory.slots[slot] = Some(stack);
+                ui.select = Some(slot);
+            }
+            None => {
+                let _ = entities.inventory.add_item(stack, entities.selected);
+            }
+        }
+    }
     if alive && !ui.inventory_open && entities.is_some() {
         let with_hand = ui.holding_item
-            && (buttons.just_pressed(MouseButton::Right) || pad_trigger(pad, GamepadButton::LeftTrigger2, true));
+            && (console_use || buttons.just_pressed(MouseButton::Right) || pad_trigger(pad, GamepadButton::LeftTrigger2, true));
         let sneaking = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ControlLeft);
         if (with_hand && !sneaking) || keys.just_pressed(KeyCode::KeyF) {
             let mut player = minecraftoss_player::Player::new(glam::DVec3::from_array(feet));
@@ -770,9 +793,56 @@ fn update(
                     ui.screen = frame::McScreen::Workbench;
                     ui.inventory_open = true;
                     used_block = true;
-                } else if let Some(screen) = containers.open((dim, hit.pos), path) {
+                } else if let Some(screen) = {
+                    // A structure's chest or barrel holds its loot table's roll
+                    // the first time it opens (`unpackLootTable`).
+                    let key = (dim, hit.pos);
+                    if crate::minecraft_containers::kind_of(path) == Some(frame::McScreen::Chest) && !containers.has(key) {
+                        let chunk = world.stream.load_now(minecraftoss_core::ChunkPos::new(hit.pos.0 >> 4, hit.pos.2 >> 4));
+                        let store = &chunk.block_entities;
+                        let tag = store.entities.get(&hit.pos).or_else(|| store.pending.get(&hit.pos));
+                        if let Some(table) = tag.and_then(|t| t.get("LootTable")).and_then(|t| t.as_str()) {
+                            let seed = tag.and_then(|t| t.get("LootTableSeed")).and_then(|t| t.as_i64()).unwrap_or(0);
+                            diag::info!(World, "Minecraft loot: {table} for the container at {:?}", hit.pos);
+                            containers.stock_chest(key, entities.roll_container(table, seed, 27));
+                        }
+                    }
+                    containers.open(key, path)
+                } {
                     ui.screen = screen;
                     ui.inventory_open = true;
+                    used_block = true;
+                } else if with_hand && path == "end_portal_frame" && held.as_deref() == Some("minecraft:ender_eye") {
+                    // `EnderEyeItem.useOn`: an eye into an empty frame; twelve
+                    // round a three by three open the portal.
+                    if block.properties.get("eye").is_none_or(|e| e != "true") {
+                        let mut filled = block.clone();
+                        filled.properties.insert("eye".into(), "true".into());
+                        set_block(world, Some(&mut *entities), shapes, shape_ids, hit.pos, Some(filled));
+                        if let Some(stack) = entities.inventory.slots[entities.selected].as_mut() {
+                            stack.count -= 1;
+                            if stack.count == 0 {
+                                entities.inventory.slots[entities.selected] = None;
+                            }
+                        }
+                        let at = |p: (i32, i32, i32)| Vec3::from_array(sim::voxel::to_map(origin, [p.0 as f64 + 0.5, p.1 as f64 + 0.5, p.2 as f64 + 0.5]));
+                        if let Some(sounds) = sounds.as_mut() {
+                            sounds.play(&world.packs, "minecraft:block.end_portal_frame.fill", Some(at(hit.pos)), 1.0, 1.0);
+                        }
+                        let frame_with_eye = |p| {
+                            minecraft_terrain::scene::Scene::block(&world.scene, p)
+                                .is_some_and(|b| b.id.path == "end_portal_frame" && b.properties.get("eye").is_some_and(|e| e == "true"))
+                        };
+                        if let Some(inside) = crate::minecraft_eyes::completed_portal(frame_with_eye, hit.pos) {
+                            for pos in inside {
+                                set_block(world, Some(&mut *entities), shapes, shape_ids, pos, Some(minecraft_terrain::scene::Block::new("minecraft:end_portal")));
+                            }
+                            if let Some(sounds) = sounds.as_mut() {
+                                // Heard everywhere (`globalLevelEvent`).
+                                sounds.play(&world.packs, "minecraft:block.end_portal.spawn", None, 1.0, 1.0);
+                            }
+                        }
+                    }
                     used_block = true;
                 } else if with_hand
                     && matches!(held.as_deref(), Some("minecraft:flint_and_steel" | "minecraft:fire_charge"))
@@ -846,11 +916,137 @@ fn update(
             }
         }
         hand.place_delay = hand.place_delay.saturating_sub(hand_ticks);
-        let place = (buttons.just_pressed(MouseButton::Right) || pad_trigger(pad, GamepadButton::LeftTrigger2, true))
+        let place = (console_use || buttons.just_pressed(MouseButton::Right) || pad_trigger(pad, GamepadButton::LeftTrigger2, true))
             || ((buttons.pressed(MouseButton::Right) || pad_trigger(pad, GamepadButton::LeftTrigger2, false)) && hand.place_delay == 0);
         if place {
             hand.place_delay = 4;
-            if let Some(pos) = player.place_selected(
+            // Buckets (`BucketItem.use`): an empty one scoops a water or lava
+            // source; a full one pours its source against the face aimed at.
+            let held = entities.inventory.slots[entities.selected].as_ref().map(|s| s.id.clone());
+            let bucket_used = match held.as_deref() {
+                Some("minecraft:bucket") => {
+                    let scooped = player.target_source_fluid(&world.scene, 5.0).and_then(|hit| {
+                        let block = minecraft_terrain::scene::Scene::block(&world.scene, hit.pos)?;
+                        let source = block.properties.get("level").is_none_or(|l| l == "0");
+                        match block.id.path.as_str() {
+                            "water" if source => Some((hit.pos, "minecraft:water_bucket", "minecraft:item.bucket.fill")),
+                            "lava" if source => Some((hit.pos, "minecraft:lava_bucket", "minecraft:item.bucket.fill_lava")),
+                            _ => None,
+                        }
+                    });
+                    if let Some((pos, filled, sound)) = scooped {
+                        set_block(world, Some(&mut *entities), shapes, shape_ids, pos, None);
+                        let slot = &mut entities.inventory.slots[entities.selected];
+                        if slot.as_ref().is_some_and(|s| s.count > 1) {
+                            if let Some(stack) = slot.as_mut() {
+                                stack.count -= 1;
+                            }
+                            let full = minecraftoss_player::inventory::ItemStack::new(filled, 1);
+                            if let Some(rest) = entities.inventory.add_item(full, entities.selected) {
+                                entities.spill((feet[0].floor() as i32, feet[1].floor() as i32, feet[2].floor() as i32), vec![rest]);
+                            }
+                        } else {
+                            *slot = Some(minecraftoss_player::inventory::ItemStack::new(filled, 1));
+                        }
+                        if let Some(sounds) = sounds.as_mut() {
+                            let at = [pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5];
+                            sounds.play(&world.packs, sound, Some(Vec3::from_array(sim::voxel::to_map(origin, at))), 1.0, 1.0);
+                        }
+                        hand.swing = Some(0.0);
+                    }
+                    true
+                }
+                Some(full @ ("minecraft:water_bucket" | "minecraft:lava_bucket")) => {
+                    if let Some(hit) = player.target(&world.scene, 5.0) {
+                        let (ox, oy, oz) = hit.face.offset();
+                        let pos = (hit.pos.0 + ox, hit.pos.1 + oy, hit.pos.2 + oz);
+                        let there = minecraft_terrain::scene::Scene::block(&world.scene, pos).map(|b| b.id.path.clone());
+                        let open = there.as_deref().is_none_or(|p| matches!(p, "water" | "lava" | "short_grass" | "tall_grass" | "fern" | "fire"));
+                        let water = full == "minecraft:water_bucket";
+                        let at = [pos.0 as f64 + 0.5, pos.1 as f64 + 0.5, pos.2 as f64 + 0.5];
+                        let at = Vec3::from_array(sim::voxel::to_map(origin, at));
+                        if open {
+                            if water && world.dimension == Dimension::Nether {
+                                // `DimensionType.ultraWarm`: water boils away.
+                                if let Some(sounds) = sounds.as_mut() {
+                                    sounds.play(&world.packs, "minecraft:block.fire.extinguish", Some(at), 0.5, 2.6);
+                                }
+                            } else {
+                                let mut block = minecraft_terrain::scene::Block::new(if water { "minecraft:water" } else { "minecraft:lava" });
+                                block.properties.insert("level".into(), "0".into());
+                                set_block(world, Some(&mut *entities), shapes, shape_ids, pos, Some(block));
+                                if let Some(sounds) = sounds.as_mut() {
+                                    let event = if water { "minecraft:item.bucket.empty" } else { "minecraft:item.bucket.empty_lava" };
+                                    sounds.play(&world.packs, event, Some(at), 1.0, 1.0);
+                                }
+                            }
+                            entities.inventory.slots[entities.selected] = Some(minecraftoss_player::inventory::ItemStack::new("minecraft:bucket", 1));
+                            hand.swing = Some(0.0);
+                        }
+                    }
+                    true
+                }
+                // `Equippable.swapWithEquipmentSlot`: armour on (what was worn
+                // comes back to the hand).
+                Some(_) if entities.inventory.slots[entities.selected].as_ref().is_some_and(|stack| {
+                    matches!(entities.inventory.recipes.equipment_slot(stack), Some("head" | "chest" | "legs" | "feet"))
+                }) => {
+                    let stack = entities.inventory.slots[entities.selected].clone().expect("checked above");
+                    let slot = match entities.inventory.recipes.equipment_slot(&stack) {
+                        Some("head") => 39,
+                        Some("chest") => 38,
+                        Some("legs") => 37,
+                        _ => 36,
+                    };
+                    let worn = entities.inventory.slots[slot].take();
+                    entities.inventory.slots[slot] = Some(stack);
+                    entities.inventory.slots[entities.selected] = worn;
+                    if let Some(sounds) = sounds.as_mut() {
+                        sounds.play(&world.packs, "minecraft:item.armor.equip_generic", None, 1.0, 1.0);
+                    }
+                    hand.swing = Some(0.0);
+                    true
+                }
+                // Gold for a piglin to barter with (`Piglin.mobInteract`).
+                Some("minecraft:gold_ingot") => {
+                    let eye_at = glam::DVec3::from_array(feet) + glam::DVec3::Y * 1.62;
+                    let (yaw, pitch) = (f64::from(mc_yaw).to_radians(), f64::from(ps.viewangles[0]).to_radians());
+                    let look = glam::DVec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos());
+                    if entities.offer_gold(eye_at, look) {
+                        if let Some(stack) = entities.inventory.slots[entities.selected].as_mut() {
+                            stack.count -= 1;
+                            if stack.count == 0 {
+                                entities.inventory.slots[entities.selected] = None;
+                            }
+                        }
+                        hand.swing = Some(0.0);
+                    }
+                    true
+                }
+                // `EnderEyeItem.use` in the air: in the Overworld it flies
+                // off towards the nearest stronghold.
+                Some("minecraft:ender_eye") => {
+                    if world.dimension == Dimension::Overworld
+                        && let Some(target) = strongholds.nearest(&world.stream, glam::DVec3::from_array(feet))
+                    {
+                        let from = glam::DVec3::from_array(feet) + glam::DVec3::Y * 1.62;
+                        eyes.throw(from, target);
+                        if let Some(stack) = entities.inventory.slots[entities.selected].as_mut() {
+                            stack.count -= 1;
+                            if stack.count == 0 {
+                                entities.inventory.slots[entities.selected] = None;
+                            }
+                        }
+                        if let Some(sounds) = sounds.as_mut() {
+                            sounds.play(&world.packs, "minecraft:entity.ender_eye.launch", None, 0.5, 0.4);
+                        }
+                        hand.swing = Some(0.0);
+                    }
+                    true
+                }
+                _ => false,
+            };
+            if !bucket_used && let Some(pos) = player.place_selected(
                 &mut world.scene,
                 &mut entities.inventory,
                 minecraftoss_player::GameMode::Survival,
@@ -1076,8 +1272,21 @@ fn update(
             ui.boss = dragon.boss();
         }
     }
+    let eye_events = eyes.update(time.delta_secs_f64());
+    if let Some(entities) = entities.as_mut() {
+        for at in eye_events.drops {
+            entities.spill((at.x.floor() as i32, at.y.floor() as i32, at.z.floor() as i32), vec![minecraftoss_player::inventory::ItemStack::new("minecraft:ender_eye", 1)]);
+        }
+    }
+    if let Some(sounds) = sounds.as_mut() {
+        for (event, at) in eye_events.sounds {
+            sounds.play(&world.packs, event, Some(Vec3::from_array(sim::voxel::to_map(origin, at.to_array()))), 1.0, 1.0);
+        }
+    }
     for fx in fight_effects {
         for (amount, from) in fx.damage {
+            // Back to Minecraft health (a fifth), through the worn armour.
+            let amount = entities.as_ref().map_or(amount, |e| (e.after_armor(amount as f32 * 0.2) / 0.2).round() as i32);
             sim::voxel::push_player_damage(local.0.0, amount, Some(sim::voxel::to_map(origin, from.to_array())));
         }
         if let Some(sounds) = sounds.as_mut() {
@@ -1279,6 +1488,7 @@ fn update(
         if world.dimension == Dimension::End {
             dragon.append_meshes(&mut meshes.models, &mut meshes.translucent, &world.atlas);
         }
+        eyes.append_meshes(&mut meshes.models, &world.atlas);
         let raw = |mesh: &minecraft_terrain::mesh::ChunkMesh| {
             (bytemuck::cast_slice::<_, u8>(&mesh.vertices).to_vec(), mesh.indices.clone())
         };
@@ -1539,6 +1749,8 @@ fn stop(runtime: &mut Runtime, view: &mut MinecraftWorldView) {
     runtime.travel = None;
     runtime.containers = Default::default();
     runtime.dragon = Default::default();
+    runtime.eyes = Default::default();
+    runtime.strongholds = Default::default();
     if let Some(dir) = runtime.world_dir.take() {
         // Streams and their savers stop first.
         runtime.world = None;

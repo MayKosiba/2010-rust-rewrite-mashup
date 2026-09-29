@@ -152,6 +152,9 @@ impl EntityWorld {
         if let Some(e) = self.slimes.iter().find(|e| e.id == id) {
             return Some((e.slime.body.clone(), e.slime.health));
         }
+        if let Some(e) = self.blazes.iter().find(|e| e.id == id) {
+            return Some((e.blaze.body.clone(), e.blaze.health));
+        }
         if let Some(e) = self.endermen.iter().find(|e| e.id == id) {
             return Some((e.enderman.body.clone(), e.enderman.health));
         }
@@ -195,6 +198,8 @@ impl EntityWorld {
             (&mut e.spider.body, &mut e.random)
         } else if let Some(e) = self.slimes.iter_mut().find(|e| e.id == id) {
             (&mut e.slime.body, &mut e.random)
+        } else if let Some(e) = self.blazes.iter_mut().find(|e| e.id == id) {
+            (&mut e.blaze.body, &mut e.random)
         } else if let Some(e) = self.endermen.iter_mut().find(|e| e.id == id) {
             (&mut e.enderman.body, &mut e.random)
         } else if let Some(e) = self.villagers.iter_mut().find(|e| e.id == id) {
@@ -268,6 +273,13 @@ impl EntityWorld {
             let hit = e.hurt(amount);
             if hit.applied {
                 e.ai.state.hurt_by = Some((crate::monster_ai::Target::Player(player), e.tick_count));
+            }
+            hit
+        } else if let Some(e) = self.blazes.iter_mut().find(|e| e.id == id) {
+            let hit = e.hurt(amount);
+            if hit.applied {
+                // `setLastHurtByMob`, for its `HurtByTargetGoal`.
+                e.hurt_by = Some((crate::monster_ai::Target::Player(player), e.tick_count));
             }
             hit
         } else if let Some(e) = self.endermen.iter_mut().find(|e| e.id == id) {

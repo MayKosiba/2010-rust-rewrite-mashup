@@ -92,6 +92,10 @@ pub struct MinecraftUi {
     /// A dimension the console asked to go to (`overworld`, `nether`,
     /// `end`), for the world to take.
     pub travel_request: Option<String>,
+    /// An item the console asked to give (`minecraft:ender_eye`, count).
+    pub give_request: Option<(String, u8)>,
+    /// The console's `mcuse`: a right click (use) this frame.
+    pub use_request: bool,
     /// A mob the console asked to summon in front of the player
     /// (`minecraft:blaze`).
     pub summon_request: Option<String>,

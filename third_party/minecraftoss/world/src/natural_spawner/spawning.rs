@@ -98,7 +98,7 @@ impl MobCategory {
         Some(match kind.trim_start_matches("minecraft:") {
             "zombie" | "zombie_villager" | "zombie_horse" | "skeleton" | "creeper" | "spider" | "enderman" | "witch" | "slime" | "husk" | "stray" | "drowned"
             | "bogged" | "parched" | "camel_husk" | "cave_spider" | "silverfish" | "phantom" | "blaze" | "ghast" | "magma_cube" | "piglin" | "hoglin"
-            | "zombified_piglin" | "pillager" | "shulker" => Self::Monster,
+            | "zombified_piglin" | "piglin_brute" | "pillager" | "shulker" => Self::Monster,
             "cow" | "pig" | "sheep" | "chicken" | "horse" | "donkey" | "mule" | "mooshroom" | "rabbit" | "wolf" | "fox" | "goat" | "llama" | "panda"
             | "polar_bear" | "cat" | "ocelot" | "parrot" | "frog" | "camel" | "armadillo" | "turtle" | "strider" => Self::Creature,
             "bat" => Self::Ambient,
@@ -581,6 +581,7 @@ impl CreatureSpawns {
                     && blocks.block(blocks.block_of(below)).name.as_str() != "minecraft:nether_wart_block"
             }
             Rules::MagmaCube => context.difficulty != 0,
+            Rules::AnyLightMonster => context.difficulty != 0 && self.mob_spawn_rules(level, kind, info, pos),
             Rules::Bat => self.bat_spawn_rules(level, kind, info, pos),
             // `pos.y <= seaLevel - 33`, unlit, in water: no random draws.
             Rules::GlowSquid => {
@@ -828,6 +829,36 @@ impl CreatureSpawns {
                 equip(&mut root, "mainhand", "minecraft:golden_sword");
                 return root;
             }
+            // `Piglin.finalizeSpawn`: a fifth are babies, the adults armed
+            // (`createSpawnWeapon`) and each armour slot golden a tenth of
+            // the time (`maybeWearArmor`), before `Mob`'s part. Simplified:
+            // always a golden sword (vanilla's 50% crossbow is not
+            // implemented), no enchantments.
+            "minecraft:piglin" => {
+                if level.random().next_f32() < 0.2 {
+                    set(&mut tag, "IsBaby", byte(true));
+                } else {
+                    level.random().next_f32();
+                    equip(&mut tag, "mainhand", "minecraft:golden_sword");
+                    for (slot, item) in [
+                        ("head", "minecraft:golden_helmet"),
+                        ("chest", "minecraft:golden_chestplate"),
+                        ("legs", "minecraft:golden_leggings"),
+                        ("feet", "minecraft:golden_boots"),
+                    ] {
+                        if level.random().next_f32() < 0.1 {
+                            equip(&mut tag, slot, item);
+                        }
+                    }
+                }
+                finalize_mob(&mut tag, &mut RandomRef(level.random()));
+            }
+            // `PiglinBrute.finalizeSpawn`: a golden axe
+            // (`populateDefaultEquipmentSlots`), then `Mob`'s part.
+            "minecraft:piglin_brute" => {
+                equip(&mut tag, "mainhand", "minecraft:golden_axe");
+                finalize_mob(&mut tag, &mut RandomRef(level.random()));
+            }
             "minecraft:zombie" | "minecraft:zombie_villager" => {
                 if kind == "minecraft:zombie_villager" {
                     // The constructor's profession, then `finalizeVillagerType`.
@@ -933,7 +964,7 @@ impl CreatureSpawns {
                 Self::ageable_monster(level, &mut tag, group);
                 finalize_mob(&mut tag, &mut RandomRef(level.random()));
             }
-            "minecraft:creeper" | "minecraft:enderman" | "minecraft:bat" => finalize_mob(&mut tag, &mut RandomRef(level.random())),
+            "minecraft:creeper" | "minecraft:enderman" | "minecraft:bat" | "minecraft:blaze" => finalize_mob(&mut tag, &mut RandomRef(level.random())),
             _ => {
                 level.note_unsupported(&format!("finalizeSpawn of {kind}"));
                 finalize_mob(&mut tag, &mut RandomRef(level.random()));

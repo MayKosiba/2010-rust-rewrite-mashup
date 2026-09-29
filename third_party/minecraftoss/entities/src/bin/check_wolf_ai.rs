@@ -127,6 +127,7 @@ fn candidate(id: u64, position: DVec3, item: &str) -> PlayerCandidate {
         alive: true,
         spectator: false,
         attackable: true,
+        wears_gold: false,
     }
 }
 

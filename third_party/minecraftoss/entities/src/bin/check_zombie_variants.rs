@@ -174,6 +174,7 @@ fn main() {
                     alive: true,
                     spectator: false,
                     attackable: true,
+                    wears_gold: false,
                 };
                 let mut player = Player::new(position);
                 player.yaw = action["yaw"].as_f64().unwrap_or(0.0);

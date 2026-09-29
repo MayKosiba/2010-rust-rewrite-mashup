@@ -40,6 +40,7 @@ pub use plugin::RenderAnimPlugin;
 mod minecraft_containers;
 mod minecraft_dragon;
 mod minecraft_entities;
+mod minecraft_eyes;
 mod minecraft_hand;
 mod minecraft_inventory;
 mod minecraft_mining;

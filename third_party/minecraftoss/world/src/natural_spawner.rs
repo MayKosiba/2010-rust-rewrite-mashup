@@ -231,6 +231,9 @@ enum Rules {
     ZombifiedPiglin,
     /// `MagmaCube.checkMagmaCubeSpawnRules`: anywhere out of peaceful.
     MagmaCube,
+    /// `Monster.checkAnyLightMonsterSpawnRules` (blazes): any light, out
+    /// of peaceful, with `Mob.checkMobSpawnRules`.
+    AnyLightMonster,
     /// `Bat.checkBatSpawnRules` (below the surface, in the dark).
     Bat,
     /// `GlowSquid.checkGlowSquidSpawnRules` (deep, dark water).
@@ -294,14 +297,17 @@ fn type_info(kind: &str) -> Option<TypeInfo> {
         // The Nether's (`EntityTypes`, all fire immune).
         "zombified_piglin" => (0.6, 1.95, Placement::OnGround, MotionBlockingNoLeaves, true, false),
         "wither_skeleton" => (0.7, 2.4, Placement::OnGround, MotionBlockingNoLeaves, true, false),
+        // Piglins and their brutes are not fire immune.
+        "piglin" | "piglin_brute" => (0.6, 1.95, Placement::OnGround, MotionBlockingNoLeaves, false, false),
         "magma_cube" => (0.52, 0.52, Placement::OnGround, MotionBlockingNoLeaves, true, false),
+        "blaze" => (0.6, 1.8, Placement::OnGround, MotionBlockingNoLeaves, true, false),
         "zombie_horse" => (1.396_484_4, 1.6, Placement::OnGround, MotionBlockingNoLeaves, false, false),
         "bat" => (0.5, 0.9, Placement::OnGround, MotionBlockingNoLeaves, false, false),
         "glow_squid" => (0.8, 0.8, Placement::InWater, MotionBlockingNoLeaves, false, false),
         _ => return None,
     };
     let short = kind.trim_start_matches("minecraft:");
-    let monster = matches!(short, "zombie" | "zombie_villager" | "witch" | "skeleton" | "creeper" | "spider" | "enderman" | "husk" | "stray" | "bogged" | "parched" | "zombified_piglin" | "wither_skeleton");
+    let monster = matches!(short, "zombie" | "zombie_villager" | "witch" | "skeleton" | "creeper" | "spider" | "enderman" | "husk" | "stray" | "bogged" | "parched" | "zombified_piglin" | "wither_skeleton" | "blaze" | "piglin" | "piglin_brute");
     let rules = match short {
         _ if animal_rules => Rules::Animal,
         "wolf" => Rules::SpawnableOn("minecraft:wolves_spawnable_on"),
@@ -313,8 +319,16 @@ fn type_info(kind: &str) -> Option<TypeInfo> {
         "stray" => Rules::Stray,
         "camel_husk" => Rules::Other,
         "slime" => Rules::Slime,
-        "zombified_piglin" => Rules::ZombifiedPiglin,
+        // `Piglin.checkPiglinSpawnRules`: not on nether wart blocks, any
+        // light. The zombified piglin's rules add the difficulty and
+        // `Mob.checkMobSpawnRules` tests, which spawning out of peaceful
+        // passes anyway.
+        "zombified_piglin" | "piglin" => Rules::ZombifiedPiglin,
+        // Brutes only come with bastions (structure templates), never
+        // naturally.
+        "piglin_brute" => Rules::Other,
         "magma_cube" => Rules::MagmaCube,
+        "blaze" => Rules::AnyLightMonster,
         "bat" => Rules::Bat,
         "glow_squid" => Rules::GlowSquid,
         _ if monster => Rules::Monster,

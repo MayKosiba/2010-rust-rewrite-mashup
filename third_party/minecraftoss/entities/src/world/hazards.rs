@@ -188,6 +188,7 @@ exposed!(CowEntity, cow, |e, h, a, w, t| e.hurt(a, animal_source(h)).applied);
 exposed!(PigEntity, pig, |e, h, a, w, t| e.hurt(a, animal_source(h)).applied);
 exposed!(ChickenEntity, chicken, |e, h, a, w, t| e.hurt_with_source(a, animal_source(h)).applied);
 exposed!(super::slimes::SlimeEntity, slime, |e, h, a, w, t| e.hurt(a).applied, immune = |m| m.slime.magma);
+exposed!(super::blazes::BlazeEntity, blaze, |e, h, a, w, t| e.hurt(a).applied, immune = |_m| true);
 exposed!(super::endermen::EndermanEntity, enderman, |e, h, a, w, t| e.hurt_by_environment(a, w).applied);
 exposed!(super::golems::IronGolemEntity, golem, |e, h, a, w, t| e.hurt(a).applied);
 exposed!(super::wolves::WolfEntity, wolf, |e, h, a, w, t| e.hurt_from(a, h.damage_type(), None, t).applied);

@@ -16,6 +16,14 @@ pub enum ZombieKind {
     /// `ZombifiedPiglin`: the Nether's; fire immune, never burns or drowns,
     /// neutral until hurt, when its kind nearby joins in.
     ZombifiedPiglin,
+    /// `Piglin`: the Nether's gold-loving natives; hostile to players
+    /// wearing no golden armour. Not undead, not fire immune. Simplified:
+    /// no Overworld zombification (vanilla converts after 15 s), no
+    /// bartering, admiring or crossbows.
+    Piglin,
+    /// `PiglinBrute`: a bastion's guard, hostile to every player. Never
+    /// spawns naturally. Simplified: no Overworld zombification.
+    PiglinBrute,
 }
 
 impl ZombieKind {
@@ -27,6 +35,8 @@ impl ZombieKind {
             Self::Husk => "minecraft:husk",
             Self::ZombieVillager => "minecraft:zombie_villager",
             Self::ZombifiedPiglin => "minecraft:zombified_piglin",
+            Self::Piglin => "minecraft:piglin",
+            Self::PiglinBrute => "minecraft:piglin_brute",
         }
     }
 
@@ -38,12 +48,43 @@ impl ZombieKind {
             Self::Husk => "husk",
             Self::ZombieVillager => "zombie_villager",
             Self::ZombifiedPiglin => "zombified_piglin",
+            Self::Piglin => "piglin",
+            Self::PiglinBrute => "piglin_brute",
         }
     }
 
-    /// `Zombie.isSunSensitive`: all but husks burn in daylight.
+    /// `Zombie.isSunSensitive`: all but husks burn in daylight (and the
+    /// piglins, which are no zombies at all).
     pub fn burns_in_daylight(self) -> bool {
-        !matches!(self, Self::Husk | Self::ZombifiedPiglin)
+        !matches!(self, Self::Husk | Self::ZombifiedPiglin | Self::Piglin | Self::PiglinBrute)
+    }
+
+    /// Whether this is a living piglin (`AbstractPiglin`), not a zombie:
+    /// not undead.
+    pub fn is_piglin(self) -> bool {
+        matches!(self, Self::Piglin | Self::PiglinBrute)
+    }
+
+    /// `createAttributes`' max health: `Piglin`'s 16, `PiglinBrute`'s 50,
+    /// the zombies' 20.
+    pub fn max_health(self) -> f32 {
+        match self {
+            Self::Piglin => 16.0,
+            Self::PiglinBrute => 50.0,
+            _ => 20.0,
+        }
+    }
+
+    /// `createAttributes`' movement speed: the piglins' 0.35, a zombie's
+    /// 0.23.
+    pub fn movement_speed(self) -> f32 {
+        if self.is_piglin() { 0.35 } else { 0.23 }
+    }
+
+    /// A baby's speed factor: `Zombie`'s +50% and `Piglin`'s +20%
+    /// (`SPEED_MODIFIER_BABY`, `ADD_MULTIPLIED_BASE`).
+    pub fn baby_speed_factor(self) -> f64 {
+        if self.is_piglin() { 1.2 } else { 1.5 }
     }
 
     /// `EntityType.fireImmune`.
@@ -51,10 +92,14 @@ impl ZombieKind {
         self == Self::ZombifiedPiglin
     }
 
-    /// `Monster.createMonsterAttributes`' attack damage: a zombified
-    /// piglin's is 5, the others' 3.
+    /// `createAttributes`' attack damage: a zombified piglin's and a
+    /// piglin's is 5, a brute's 7, the others' 3.
     pub fn attack_damage(self) -> f32 {
-        if self == Self::ZombifiedPiglin { 5.0 } else { 3.0 }
+        match self {
+            Self::ZombifiedPiglin | Self::Piglin => 5.0,
+            Self::PiglinBrute => 7.0,
+            _ => 3.0,
+        }
     }
 
     /// `convertsInWater` and `convertsToWhenDrowning`: a zombie becomes a
@@ -63,7 +108,7 @@ impl ZombieKind {
         match self {
             Self::Zombie => Some(Self::Drowned),
             Self::Husk => Some(Self::Zombie),
-            Self::Drowned | Self::ZombieVillager | Self::ZombifiedPiglin => None,
+            Self::Drowned | Self::ZombieVillager | Self::ZombifiedPiglin | Self::Piglin | Self::PiglinBrute => None,
         }
     }
 
@@ -119,7 +164,7 @@ impl Zombie {
 
     /// `Mob.doHurtTarget`'s damage: the type's attack damage with its main
     /// hand weapon's (`ATTACK_DAMAGE` modifiers: a sword's or shovel's
-    /// damage less the base 1).
+    /// damage less the base 1; a golden axe's 7 less 1).
     pub fn melee_damage(&self) -> f32 {
         let weapon = match self.main_hand.as_deref() {
             Some("minecraft:wooden_sword" | "minecraft:golden_sword") => 3.0,
@@ -128,6 +173,7 @@ impl Zombie {
             Some("minecraft:diamond_sword") => 6.0,
             Some("minecraft:netherite_sword") => 7.0,
             Some("minecraft:iron_shovel") => 3.5,
+            Some("minecraft:golden_axe") => 6.0,
             _ => 0.0,
         };
         self.kind.attack_damage() + weapon
@@ -146,7 +192,7 @@ impl Zombie {
                 ZombieKind::Husk => 0.825,
                 ZombieKind::ZombieVillager => 0.67,
                 ZombieKind::Zombie | ZombieKind::Drowned => 0.775,
-                ZombieKind::ZombifiedPiglin => 0.97,
+                ZombieKind::ZombifiedPiglin | ZombieKind::Piglin | ZombieKind::PiglinBrute => 0.97,
             }
         } else {
             1.74

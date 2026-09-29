@@ -22,6 +22,15 @@ pub(crate) fn exit_process(mut exit: MessageReader<AppExit>, bridge: Option<Res<
     diag::lifecycle_boundary("process_exit", &format!(" code={code}"));
     diag::flush();
     let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    // `_exit` on Unix: the logs are flushed, and running the C library's
+    // exit hooks while the render threads still hold the GPU crashed in the
+    // NVIDIA driver's own hook (and the crash dump held the window up).
+    #[cfg(unix)]
+    unsafe {
+        libc::_exit(code)
+    }
+    #[cfg(not(unix))]
     std::process::exit(code);
 }
 

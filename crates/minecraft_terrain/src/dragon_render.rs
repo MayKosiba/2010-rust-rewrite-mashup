@@ -252,11 +252,28 @@ pub fn append_fireball(mesh: &mut ChunkMesh, position: DVec3, age: f32, atlas: &
         return;
     }
     let region = atlas.entity_region(&id);
+    crossed_squares(mesh, position, age, 0.5, region);
+}
+
+/// A blaze's small fireball (`SmallFireball`, 0.3125 blocks): the fire
+/// charge's sprite as three crossed squares, turning, full bright.
+/// Vanilla draws it as a camera-facing item sprite (`ThrownItemRenderer`).
+pub fn append_small_fireball(mesh: &mut ChunkMesh, position: DVec3, age: f32, atlas: &Atlas) {
+    let id = ResourceId::parse("minecraft:item/fire_charge").unwrap();
+    if !atlas.contains(&id) {
+        return;
+    }
+    let region = atlas.region(&id);
+    crossed_squares(mesh, position, age, 0.3125 / 2.0 + 0.05, region);
+}
+
+/// Three crossed squares of `half` size about `position`, turning with
+/// `age`.
+fn crossed_squares(mesh: &mut ChunkMesh, position: DVec3, age: f32, half: f32, region: [f32; 4]) {
     let turn = Quat::from_rotation_y(age * 0.3) * Quat::from_rotation_x(age * 0.2);
     let c = position.as_vec3();
-    let h = 0.5;
     for (u, v) in [(Vec3::X, Vec3::Y), (Vec3::Y, Vec3::Z), (Vec3::Z, Vec3::X)] {
-        let (u, v) = (turn * u * h, turn * v * h);
+        let (u, v) = (turn * u * half, turn * v * half);
         quad(mesh, [c - u - v, c + u - v, c + u + v, c - u + v], region);
     }
 }

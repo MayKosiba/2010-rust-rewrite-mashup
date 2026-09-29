@@ -154,6 +154,9 @@ impl EntityLootBook {
             let name = entry.name().to_owned();
             let wanted = name.starts_with("data/minecraft/loot_table/entities/")
                 || name.starts_with("data/minecraft/loot_table/charged_creeper/")
+                // Containers' tables (`chests/`) and bartering (`gameplay/`).
+                || name.starts_with("data/minecraft/loot_table/chests/")
+                || name.starts_with("data/minecraft/loot_table/gameplay/")
                 || name.starts_with("data/minecraft/tags/item/")
                 || name.starts_with("data/minecraft/tags/entity_type/")
                 || name.starts_with("data/minecraft/recipe/");
@@ -238,10 +241,74 @@ impl EntityLootBook {
         // A table outside the implemented evaluator must not partially advance
         // the persistent named stream before its missing rule is implemented.
         let mut candidate = random.clone();
-        let data = LootData { tables: &self.tables, smelting: &self.smelting, item_tags: &self.item_tags, entity_tags: &self.entity_tags };
+        let data = LootData { lenient: false, tables: &self.tables, smelting: &self.smelting, item_tags: &self.item_tags, entity_tags: &self.entity_tags };
         let drops = roll_table(&data, table, context, &mut candidate)?;
         *random = candidate;
         Some(drops)
+    }
+}
+
+impl EntityLootBook {
+    /// `RandomizableContainer.unpackLootTable`: a container's table rolled
+    /// from its `LootTableSeed` (`RandomSource.create(seed)`) and spread over
+    /// `slots` slots by `LootTable.fill`. Functions not modelled (enchanting,
+    /// damage, maps) leave their items plain.
+    pub fn roll_container(&self, table: &str, seed: i64, slots: usize) -> Vec<Option<ItemStack>> {
+        let mut random = minecraftoss_player::rng::LegacyRandom::new(seed as u64);
+        let mut out = vec![None; slots];
+        let Some(json) = self.tables.get(table) else { return out };
+        let data = LootData { lenient: true, tables: &self.tables, smelting: &self.smelting, item_tags: &self.item_tags, entity_tags: &self.entity_tags };
+        let items = roll_table(&data, json, EntityLootContext::default(), &mut random).unwrap_or_default();
+        fill(&mut out, items, &mut random);
+        out
+    }
+
+    /// A roll of one of the plain tables (`gameplay/piglin_bartering`),
+    /// from `random`.
+    pub fn roll_gameplay(&self, table: &str, random: &mut impl LootRandom) -> Vec<ItemStack> {
+        let Some(json) = self.tables.get(table) else { return Vec::new() };
+        let data = LootData { lenient: true, tables: &self.tables, smelting: &self.smelting, item_tags: &self.item_tags, entity_tags: &self.entity_tags };
+        roll_table(&data, json, EntityLootContext::default(), random).unwrap_or_default()
+    }
+}
+
+/// `LootTable.fill`: the empty slots shuffled, the stacks split among them
+/// (`shuffleAndSplitItems`), then each in the next slot.
+fn fill(slots: &mut [Option<ItemStack>], items: Vec<ItemStack>, random: &mut impl LootRandom) {
+    let mut open: Vec<usize> = (0..slots.len()).filter(|&i| slots[i].is_none()).collect();
+    shuffle(&mut open, random);
+    let (mut singles, mut splittable): (Vec<ItemStack>, Vec<ItemStack>) = items.into_iter().filter(|s| s.count > 0).partition(|s| s.count <= 1);
+    while open.len() > singles.len() + splittable.len() && !splittable.is_empty() {
+        let at = random.next_int(splittable.len() as u32) as usize;
+        let mut stack = splittable.remove(at);
+        let take = 1 + random.next_int(u32::from(stack.count / 2).max(1)) as u8;
+        let mut part = stack.clone();
+        part.count = take;
+        stack.count -= take;
+        for piece in [stack, part] {
+            if piece.count == 0 {
+                continue;
+            }
+            if piece.count > 1 && random.next_int(2) == 0 {
+                splittable.push(piece);
+            } else {
+                singles.push(piece);
+            }
+        }
+    }
+    singles.extend(splittable);
+    shuffle(&mut singles, random);
+    for stack in singles {
+        let Some(slot) = open.pop() else { break };
+        slots[slot] = Some(stack);
+    }
+}
+
+/// `Util.shuffle`: Fisher–Yates from the back.
+fn shuffle<T>(list: &mut [T], random: &mut impl LootRandom) {
+    for i in (1..list.len()).rev() {
+        let j = random.next_int(i as u32 + 1) as usize;
+        list.swap(i, j);
     }
 }
 
@@ -252,6 +319,10 @@ fn tag_values(tag: &Value) -> Vec<String> {
 
 /// What the evaluator reads besides the table itself.
 struct LootData<'a> {
+    /// Chest and bartering rolls: a function, entry or condition the
+    /// evaluator lacks is passed over (the item comes without it) rather
+    /// than failing the table, as entity drops must.
+    lenient: bool,
     tables: &'a HashMap<String, Value>,
     smelting: &'a HashMap<String, String>,
     item_tags: &'a HashMap<String, Vec<String>>,
@@ -329,13 +400,14 @@ fn roll_table(data: &LootData, table: &Value, context: EntityLootContext, random
 /// An entry's, pool's or function's `condition` (or `conditions`, all of
 /// which must hold), tested in order.
 fn conditions(data: &LootData, holder: &Value, context: EntityLootContext, random: &mut impl LootRandom) -> Option<bool> {
+    let lenient = data.lenient.then_some(false);
     if let Some(condition) = holder.get("condition") {
-        if !condition_true(data, condition, context, random)? {
+        if !condition_true(data, condition, context, random).or(lenient)? {
             return Some(false);
         }
     }
     for condition in holder.get("conditions").and_then(Value::as_array).into_iter().flatten() {
-        if !condition_true(data, condition, context, random)? {
+        if !condition_true(data, condition, context, random).or(lenient)? {
             return Some(false);
         }
     }
@@ -377,6 +449,7 @@ fn expand(data: &LootData, entry: &Value, context: EntityLootContext, random: &m
             }
             Some(false)
         }
+        _ if data.lenient => Some(false),
         _ => None,
     }
 }
@@ -415,6 +488,9 @@ fn create(data: &LootData, leaf: &Value, context: EntityLootContext, random: &mu
                     "minecraft:furnace_smelt" => item = data.smelting.get(&item)?.clone(),
                     // `SetPotionFunction`: the potion contents component.
                     "minecraft:set_potion" => potion = Some(function["id"].as_str()?.to_owned()),
+                    // Enchanting, damage, names, maps and the like are not
+                    // modelled: a chest's item comes plain.
+                    _ if data.lenient => {}
                     _ => return None,
                 }
             }
@@ -442,6 +518,12 @@ fn int_provider(value: &Value, random: &mut impl LootRandom) -> Option<i32> {
     }
     match value["type"].as_str()? {
         "minecraft:constant" => Some(value["value"].as_f64()?.floor() as i32),
+        // `BinomialDistributionGenerator`: `n` trials at `p`.
+        "minecraft:binomial" => {
+            let n = int_provider(&value["n"], random)?;
+            let p = float_provider(&value["p"])?;
+            Some((0..n).filter(|_| random.next_float() < p).count() as i32)
+        }
         // `Mth.randomBetweenInclusive`.
         "minecraft:uniform" => {
             let min = int_provider(&value["min"], random)?;

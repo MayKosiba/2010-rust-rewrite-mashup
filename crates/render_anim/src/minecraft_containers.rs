@@ -62,6 +62,21 @@ impl Containers {
         Some(screen)
     }
 
+    /// Whether a block's container exists yet (a structure's chest is filled
+    /// from its loot table when first opened).
+    pub(crate) fn has(&self, key: Key) -> bool {
+        self.chests.contains_key(&key) || self.furnaces.contains_key(&key)
+    }
+
+    /// A chest's first contents: its loot, rolled.
+    pub(crate) fn stock_chest(&mut self, key: Key, slots: Vec<Option<ItemStack>>) {
+        let mut chest = Chest::default();
+        for (slot, stack) in chest.slots.iter_mut().zip(slots) {
+            *slot = stack;
+        }
+        self.chests.insert(key, chest);
+    }
+
     pub(crate) fn close(&mut self) {
         self.open = None;
     }

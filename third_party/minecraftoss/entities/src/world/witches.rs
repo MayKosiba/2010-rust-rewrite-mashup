@@ -455,7 +455,9 @@ impl EntityWorld {
             return Some((&mut e.effects, false, false));
         }
         if let Some(e) = self.zombies.iter_mut().find(|e| e.id == id) {
-            return Some((&mut e.effects, true, false));
+            // Piglins and brutes are no undead.
+            let undead = !e.zombie.kind.is_piglin();
+            return Some((&mut e.effects, undead, false));
         }
         if let Some(e) = self.skeletons.iter_mut().find(|e| e.id == id) {
             return Some((&mut e.effects, true, false));
@@ -467,6 +469,9 @@ impl EntityWorld {
             return Some((&mut e.effects, false, true));
         }
         if let Some(e) = self.slimes.iter_mut().find(|e| e.id == id) {
+            return Some((&mut e.effects, false, false));
+        }
+        if let Some(e) = self.blazes.iter_mut().find(|e| e.id == id) {
             return Some((&mut e.effects, false, false));
         }
         if let Some(e) = self.endermen.iter_mut().find(|e| e.id == id) {
@@ -507,6 +512,7 @@ impl EntityWorld {
             .or_else(|| self.creepers.iter().find(|e| e.id == id).map(|e| &e.effects))
             .or_else(|| self.spiders.iter().find(|e| e.id == id).map(|e| &e.effects))
             .or_else(|| self.slimes.iter().find(|e| e.id == id).map(|e| &e.effects))
+            .or_else(|| self.blazes.iter().find(|e| e.id == id).map(|e| &e.effects))
             .or_else(|| self.endermen.iter().find(|e| e.id == id).map(|e| &e.effects))
             .or_else(|| self.villagers.iter().find(|e| e.id == id).map(|e| &e.effects))
             .or_else(|| self.iron_golems.iter().find(|e| e.id == id).map(|e| &e.effects))
@@ -523,7 +529,7 @@ impl EntityWorld {
     /// round. An enderman teleports away from a potion instead of taking
     /// its harm (`Enderman.hurtServer`).
     fn splash_instant(&mut self, id: u64, effect: MobEffect, amplifier: i32, scale: f64, at: DVec3, owner: Option<u64>) {
-        let undead = self.zombies.iter().any(|e| e.id == id) || self.skeletons.iter().any(|e| e.id == id);
+        let undead = self.zombies.iter().any(|e| e.id == id && !e.zombie.kind.is_piglin()) || self.skeletons.iter().any(|e| e.id == id);
         match instant_work(effect, amplifier, undead, scale) {
             Some(EffectWork::Heal(amount)) => self.heal_mob(id, amount),
             Some(EffectWork::HurtMagic(amount)) => {
@@ -550,7 +556,7 @@ impl EntityWorld {
         } else if let Some(e) = self.bats.iter_mut().find(|e| e.id == id) {
             (&mut e.bat.health, 6.0)
         } else if let Some(e) = self.zombies.iter_mut().find(|e| e.id == id) {
-            (&mut e.zombie.health, 20.0)
+            (&mut e.zombie.health, e.zombie.kind.max_health())
         } else if let Some(e) = self.skeletons.iter_mut().find(|e| e.id == id) {
             let max = e.skeleton.kind.max_health();
             (&mut e.skeleton.health, max)
@@ -561,6 +567,8 @@ impl EntityWorld {
         } else if let Some(e) = self.slimes.iter_mut().find(|e| e.id == id) {
             let max = e.slime.max_health();
             (&mut e.slime.health, max)
+        } else if let Some(e) = self.blazes.iter_mut().find(|e| e.id == id) {
+            (&mut e.blaze.health, crate::blaze::MAX_HEALTH)
         } else if let Some(e) = self.endermen.iter_mut().find(|e| e.id == id) {
             (&mut e.enderman.health, crate::enderman::MAX_HEALTH)
         } else if let Some(e) = self.villagers.iter_mut().find(|e| e.id == id) {
@@ -601,6 +609,8 @@ impl EntityWorld {
         } else if let Some(e) = self.spiders.iter_mut().find(|e| e.id == id) {
             e.hurt(amount)
         } else if let Some(e) = self.slimes.iter_mut().find(|e| e.id == id) {
+            e.hurt(amount)
+        } else if let Some(e) = self.blazes.iter_mut().find(|e| e.id == id) {
             e.hurt(amount)
         } else if let Some(e) = self.endermen.iter_mut().find(|e| e.id == id) {
             // A potion's hit teleports it away, up to 64 tries.

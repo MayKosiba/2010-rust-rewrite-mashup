@@ -105,6 +105,7 @@ fn main() {
                     alive: true,
                     spectator: false,
                     attackable: false,
+                    wears_gold: false,
                 });
             }
             "snapshot" => {
