@@ -57,7 +57,9 @@ pub struct MinecraftWorldView {
     pub crack_texture: Option<Arc<image::RgbaImage>>,
     /// Mob models (cut out, back-face culled, translucent) and entity
     /// shadows, as `mesh::Vertex` bytes and indices.
-    pub entity_meshes: [(Vec<u8>, Vec<u32>); 4],
+    /// shadows, and the player's armour in the inventory's window (drawn in
+    /// the view model's depth band with the soldier there).
+    pub entity_meshes: [(Vec<u8>, Vec<u32>); 5],
     /// The black card behind the inventory's character, in blocks.
     pub backdrop: Option<[[f32; 3]; 4]>,
     /// The first-person hand or held item: section vertex bytes in view
@@ -271,6 +273,12 @@ pub(crate) fn register(app: &mut App) {
             update
                 .after(frame::PresentedPublished)
                 .in_set(frame::ClientSet::Present),
+        )
+        .add_systems(
+            Update,
+            crate::minecraft_armor::draw_player_armor
+                .after(update)
+                .after(crate::occupancy::remote_body::pose_remote_bodies),
         );
 }
 
@@ -1497,6 +1505,7 @@ fn update(
             raw(&meshes.culled),
             raw(&meshes.translucent),
             raw(&meshes.shadows),
+            Default::default(),
         ];
         let mesh = meshes.items;
         let (bytes, indices) = &mut view.particles;

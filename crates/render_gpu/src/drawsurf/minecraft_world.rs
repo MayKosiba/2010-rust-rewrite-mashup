@@ -82,7 +82,9 @@ pub struct MinecraftWorldFrame {
     pub crack_texture: Option<Arc<MinecraftAtlasImage>>,
     /// Mob models (cut out, back-face culled, translucent) and entity
     /// shadows: MinecraftOSS `Vertex` bytes (44 each) and indices.
-    pub entity_meshes: [(Vec<u8>, Vec<u32>); 4],
+    /// The fifth: the player's armour in the inventory's window, drawn in
+    /// the view model's depth band as the soldier there is.
+    pub entity_meshes: [(Vec<u8>, Vec<u32>); 5],
     /// A black card to draw, in blocks: behind the inventory's character.
     pub backdrop: Option<[[f32; 3]; 4]>,
     /// The first-person hand or held item in view space, and its projection.
@@ -128,7 +130,7 @@ struct TerrainGpu {
     particles: Option<(Buffer, Buffer, u32)>,
     cracks: Option<(Buffer, Buffer, u32)>,
     /// This frame's entity meshes, in `MinecraftWorldFrame::entity_meshes` order.
-    entities: [Option<(Buffer, Buffer, u32)>; 4],
+    entities: [Option<(Buffer, Buffer, u32)>; 5],
     backdrop: Option<Buffer>,
     hand: Option<(Buffer, Buffer, u32)>,
     sampler: Option<Sampler>,
@@ -542,6 +544,17 @@ fn draw_terrain(
         pass.set_render_pipeline(&backdrop);
         pass.set_vertex_buffer(0, card.slice(..));
         pass.draw(0..6, 0..1);
+        pass.set_viewport(vp.x as f32, vp.y as f32, vp.z as f32, vp.w as f32, depth_min, depth_max);
+        pass.set_render_pipeline(&opaque);
+    }
+    // The player's armour on the inventory's soldier, in its depth band.
+    if let Some((vertices, indices, count)) = gpu.entities[4].as_ref() {
+        let (band_min, band_max) = reverse_z_viewport_depth(super::depth_range::GFX_DEPTH_RANGE_VIEWMODEL);
+        pass.set_viewport(vp.x as f32, vp.y as f32, vp.z as f32, vp.w as f32, band_min, band_max);
+        pass.set_render_pipeline(&entity);
+        pass.set_vertex_buffer(0, vertices.slice(..));
+        pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
+        pass.draw_indexed(0..*count, 0, 0..1);
         pass.set_viewport(vp.x as f32, vp.y as f32, vp.z as f32, vp.w as f32, depth_min, depth_max);
         pass.set_render_pipeline(&opaque);
     }

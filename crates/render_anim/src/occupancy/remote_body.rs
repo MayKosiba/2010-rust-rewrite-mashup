@@ -496,7 +496,7 @@ fn remote_body_scene_slot(
     }
 }
 
-fn pose_remote_bodies(
+pub(crate) fn pose_remote_bodies(
     skate: Res<frame::SkateMode>,
     puppet: Option<Res<frame::InventoryPuppet>>,
     time: Res<Time>,

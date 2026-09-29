@@ -62,6 +62,7 @@ pub(crate) fn register_debug_move_commands(registry: &mut ConsoleRegistry) {
             ])),
     );
     registry.register(crate::CommandSpec::new("mcuse").usage("mcuse — use (right click) with the held Minecraft item"));
+    registry.register(crate::CommandSpec::new("mcinv").usage("mcinv — open or close the Minecraft inventory (as E)"));
     registry.register(
         crate::CommandSpec::new("summon")
             .usage("summon <mob> — a Minecraft mob in front of you (zombified_piglin, magma_cube, wither_skeleton, ...)")
@@ -175,6 +176,14 @@ pub(crate) fn route_debug_move_commands(
                 }
                 _ => echo("usage: mcgive <item> [count] (on the Minecraft map)".into(), &mut console, &mut line),
             },
+            "mcinv" => {
+                if let Some(ui) = minecraft.as_deref_mut().filter(|ui| ui.active) {
+                    ui.inventory_open = !ui.inventory_open;
+                    if !ui.inventory_open {
+                        ui.clicks.push(frame::McClick::Close);
+                    }
+                }
+            }
             "mcuse" => {
                 if let Some(ui) = minecraft.as_deref_mut() {
                     ui.use_request = true;

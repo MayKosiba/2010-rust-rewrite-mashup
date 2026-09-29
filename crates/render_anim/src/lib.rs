@@ -37,6 +37,7 @@ pub use occupancy::{
 };
 pub use plugin::RenderAnimPlugin;
 
+mod minecraft_armor;
 mod minecraft_containers;
 mod minecraft_dragon;
 mod minecraft_entities;
