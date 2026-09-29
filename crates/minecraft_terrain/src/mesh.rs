@@ -376,6 +376,9 @@ fn build_internal<S: Scene>(scene: &S, packs: &PackStack, preload_blocks: bool) 
     // stars, the dragon, the end crystals and the dragon's fireball.
     for id in [
         "entity/end_portal/end_portal",
+        "entity/piglin/zombified_piglin",
+        "entity/skeleton/wither_skeleton",
+        "entity/slime/magmacube",
         "entity/enderdragon/dragon",
         "entity/enderdragon/dragon_eyes",
         "entity/enderdragon/dragon_fireball",

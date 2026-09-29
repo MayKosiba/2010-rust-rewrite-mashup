@@ -22,6 +22,9 @@ pub struct Slime {
     pub target_squish: f32,
     pub squish: f32,
     pub previous_squish: f32,
+    /// `MagmaCube`: the Nether's slime; fire immune, armoured by its size,
+    /// harder hitting, jumping higher and more often, with its own sounds.
+    pub magma: bool,
 }
 
 impl Slime {
@@ -40,7 +43,28 @@ impl Slime {
             target_squish: 0.0,
             squish: 0.0,
             previous_squish: 0.0,
+            magma: false,
         }
+    }
+
+    /// A magma cube of `size`.
+    pub fn magma(position: DVec3, size: i32) -> Self {
+        Self { magma: true, ..Self::new(position, size) }
+    }
+
+    /// `MagmaCube.setSize`: 3 armour a size step (slimes have none).
+    pub fn armor(&self) -> f32 {
+        if self.magma { 3.0 * self.size as f32 } else { 0.0 }
+    }
+
+    /// The entity type's ID.
+    pub fn type_id(&self) -> &'static str {
+        if self.magma { "minecraft:magma_cube" } else { "minecraft:slime" }
+    }
+
+    /// Its sounds' prefix: `entity.magma_cube.*` or `entity.slime.*`.
+    pub fn sound_family(&self) -> &'static str {
+        if self.magma { "magma_cube" } else { "slime" }
     }
 
     /// `setCubeMobHealth`: the size squared.
@@ -55,7 +79,8 @@ impl Slime {
 
     /// `Slime.setSize`: `ATTACK_DAMAGE` is the size.
     pub fn attack_damage(&self) -> f32 {
-        self.size as f32
+        // `MagmaCube.getAttackDamage`: two more.
+        self.size as f32 + if self.magma { 2.0 } else { 0.0 }
     }
 
     pub fn eye_height(&self) -> f32 {

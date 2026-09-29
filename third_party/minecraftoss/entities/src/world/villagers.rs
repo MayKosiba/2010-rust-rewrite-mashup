@@ -285,7 +285,7 @@ impl EntityWorld {
             out.push(seen_of("minecraft:spider", "monster", &e.spider.body, e.spider.eye_height(), e.spider.health > 0.0, false, e.id));
         }
         for e in &self.slimes {
-            out.push(seen_of("minecraft:slime", "monster", &e.slime.body, e.slime.eye_height(), e.slime.health > 0.0, false, e.id));
+            out.push(seen_of(e.slime.type_id(), "monster", &e.slime.body, e.slime.eye_height(), e.slime.health > 0.0, false, e.id));
         }
         for e in &self.endermen {
             out.push(seen_of("minecraft:enderman", "monster", &e.enderman.body, e.enderman.eye_height(), e.enderman.health > 0.0, false, e.id));

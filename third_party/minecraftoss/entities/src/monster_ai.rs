@@ -724,6 +724,22 @@ impl MonsterAi {
         Self::of_kind(MonsterKind::Creeper, body, yaw)
     }
 
+    /// A wither skeleton's goals: `reassessWeaponGoal` with no bow in hand
+    /// runs the melee attack in the bow goal's place.
+    pub fn melee_instead_of_bow(&mut self) {
+        let mut selector = GoalSelector::default();
+        selector.add(5, StrollGoal { speed: 1.0, probability: 0.001 });
+        selector.add(6, LookAtPlayerGoal { range: 8.0 });
+        selector.add(6, RandomLookGoal);
+        selector.add(4, MeleeAttackGoal { hits: true, raises_arms: false, follow_unseen: false, gives_up_in_light: false });
+        self.goals = selector;
+    }
+
+    /// Makes a zombie a zombified piglin's: neutral until hurt.
+    pub fn neutral_until_hurt(&mut self) {
+        self.targets = zombified_piglin_targets();
+    }
+
     pub fn of_kind(kind: MonsterKind, body: &Body, yaw: f32) -> Self {
         // `Monster`: none of an animal's fire maluses; the creeper's
         // `FloatGoal` lets its navigation float; it walks towards darkness.
@@ -1386,6 +1402,16 @@ pub fn zombie_goals() -> GoalSelector<MonsterGoalContext> {
     selector.add(3, MeleeAttackGoal { hits: true, raises_arms: true, follow_unseen: false, gives_up_in_light: false });
     selector.add(6, VillageGoal::default());
     selector.add(7, StrollGoal { speed: 1.0, probability: 0.001 });
+    selector
+}
+
+/// `ZombifiedPiglin.addBehaviourGoals`' targets: neutral, it turns on
+/// whoever hurts it (and calls its kind in), never seeking prey first.
+/// Vanilla's anger timer and its target by `isAngryAt` are the hurt-by
+/// target held while it can follow.
+pub fn zombified_piglin_targets() -> GoalSelector<MonsterGoalContext> {
+    let mut selector = GoalSelector::default();
+    selector.add(1, HurtByTargetGoal { timestamp: 0, unseen_ticks: 0, target_mob: None, alert_others: true });
     selector
 }
 

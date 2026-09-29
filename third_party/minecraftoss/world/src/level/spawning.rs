@@ -214,6 +214,12 @@ impl Level<'_> {
 }
 
 impl SpawnLevel for Level<'_> {
+    fn in_fortress_piece(&self, pos: BlockPos) -> bool {
+        self.fortress_pieces.get(&pos.chunk()).is_some_and(|boxes| {
+            boxes.iter().any(|b| (b[0]..=b[3]).contains(&pos.x) && (b[1]..=b[4]).contains(&pos.y) && (b[2]..=b[5]).contains(&pos.z))
+        })
+    }
+
     fn block(&self, pos: BlockPos) -> BlockStateId {
         Level::block(self, pos)
     }

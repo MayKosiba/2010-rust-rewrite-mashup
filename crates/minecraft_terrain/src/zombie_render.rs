@@ -77,6 +77,8 @@ pub fn append_zombies<'a>(
             (ZombieKind::Husk, false) => "minecraft:entity/zombie/husk",
             (ZombieKind::Husk, true) => "minecraft:entity/zombie/husk_baby",
             (ZombieKind::ZombieVillager, _) => unreachable!("drawn by append_zombie_villager"),
+            // The baby is drawn as the adult, scaled (below).
+            (ZombieKind::ZombifiedPiglin, _) => "minecraft:entity/piglin/zombified_piglin",
         })
         .unwrap();
         let region = atlas.entity_region(&id);
@@ -85,9 +87,10 @@ pub fn append_zombies<'a>(
         let block = light.get_block(sample) as f32;
         let rotation = pose.body_rotation(90.0);
         let head = Quat::from_euler(EulerRot::ZYX, 0.0, pose.head_yaw.to_radians(), pose.head_pitch.to_radians());
-        let parts = if zombie.baby { &BABY } else { &ADULT };
+        let piglin = zombie.kind == ZombieKind::ZombifiedPiglin;
+        let parts = if zombie.baby && !piglin { &BABY } else { &ADULT };
         let rest = [(parts[3].3[0], parts[3].3[2]), (parts[4].3[0], parts[4].3[2])];
-        let pose_limbs = limb_rotations(pose.walk_position, pose.walk_speed, pose.age_in_ticks, entity.aggressive, pose.swing, if zombie.baby { 0.5 } else { 1.0 }, rest);
+        let pose_limbs = limb_rotations(pose.walk_position, pose.walk_speed, pose.age_in_ticks, entity.aggressive, pose.swing, if zombie.baby && !piglin { 0.5 } else { 1.0 }, rest);
         let limbs = pose_limbs.limbs;
         let arm_pivot = |arm: usize| {
             let (x, z) = pose_limbs.arm_pivots[arm];
@@ -96,10 +99,15 @@ pub fn append_zombies<'a>(
         // `ItemInHandLayer`: the main hand's item in the right hand.
         if let Some(item) = &zombie.main_hand {
             let pivot = glam::Vec3::from_array(arm_pivot(0));
-            held.push(crate::mesh::HeldItem { pose: crate::cow_render::right_hand_pose(feet, pose.body_rotation(90.0), pivot, limbs[0], zombie.baby), light: pose.light_probe.as_vec3(), id: item.clone(), display: crate::mesh::HeldDisplay::RightHand, first_tint: None });
+            held.push(crate::mesh::HeldItem { pose: crate::cow_render::right_hand_pose(feet, pose.body_rotation(90.0), pivot, limbs[0], zombie.baby && !piglin), light: pose.light_probe.as_vec3(), id: item.clone(), display: crate::mesh::HeldDisplay::RightHand, first_tint: None });
         }
         // `LayerDefinitions`: the adult husk is scaled up by 1.0625.
         let scale = if zombie.kind == ZombieKind::Husk && !zombie.baby { 1.0625 } else { 1.0 };
+        if piglin {
+            let scale = if zombie.baby { 0.5 } else { 1.0 };
+            append_piglin(mesh, feet, rotation, scale, region, sky, block, head, &pose_limbs, [arm_pivot(0), arm_pivot(1)]);
+            continue;
+        }
         for (index, &(from, to, uv, pivot)) in (if zombie.baby { &BABY } else { &ADULT }).iter().enumerate() {
             let mut uv = uv;
             // DrownedModel gives its left limbs their own skin, unmirrored;
@@ -165,6 +173,51 @@ pub fn append_zombies<'a>(
     }
     crate::cow_render::apply_overlays(mesh, &marks);
     held
+}
+
+/// A zombified piglin: `PiglinModel`'s head (wide, with snout, tusks and
+/// ears turned out) on the player-shaped body, its left limbs with their own
+/// skin; posed as a zombie.
+#[allow(clippy::too_many_arguments)]
+fn append_piglin(
+    mesh: &mut ChunkMesh,
+    feet: glam::DVec3,
+    rotation: Quat,
+    scale: f32,
+    region: [f32; 4],
+    sky: f32,
+    block: f32,
+    head: Quat,
+    limbs: &ZombieLimbs,
+    arm_pivots: [[f32; 3]; 2],
+) {
+    let mut cube = |from: [f32; 3], to: [f32; 3], uv: [f32; 2], pivot: [f32; 3], turn: Quat| {
+        cube_tinted_pose_mirror(mesh, feet, rotation, scale, region, sky, block, from, to, uv, pivot, turn, [1.0; 3], [64., 64.], None, false);
+    };
+    // The head and its face.
+    for (from, to, uv) in [
+        ([-5., -8., -4.], [5., 0., 4.], [0., 0.]),
+        ([-2., -4., -5.], [2., 0., -4.], [31., 1.]),
+        ([2., -2., -5.], [3., 0., -4.], [2., 4.]),
+        ([-3., -2., -5.], [-2., 0., -4.], [2., 0.]),
+    ] {
+        cube(from, to, uv, [0., 0., 0.], head);
+    }
+    // The ears, children of the head, tilted out by a twelfth turn.
+    let tilt = std::f32::consts::PI / 6.0;
+    for (from, to, uv, offset, roll) in [
+        ([0., 0., -2.], [1., 5., 2.], [51., 6.], [4.5, -6., 0.], -tilt),
+        ([-1., 0., -2.], [0., 5., 2.], [39., 6.], [-4.5, -6., 0.], tilt),
+    ] {
+        let pivot = head * glam::Vec3::from_array(offset);
+        cube(from, to, uv, pivot.to_array(), head * Quat::from_rotation_z(roll));
+    }
+    // Body, arms and legs.
+    cube([-4., 0., -2.], [4., 12., 2.], [16., 16.], [0., 0., 0.], Quat::from_rotation_y(limbs.body_yaw));
+    cube([-3., -2., -2.], [1., 10., 2.], [40., 16.], arm_pivots[0], limbs.limbs[0]);
+    cube([-1., -2., -2.], [3., 10., 2.], [32., 48.], arm_pivots[1], limbs.limbs[1]);
+    cube([-2., 0., -2.], [2., 12., 2.], [0., 16.], [-1.9, 12., 0.], limbs.limbs[2]);
+    cube([-2., 0., -2.], [2., 12., 2.], [16., 48.], [1.9, 12., 0.], limbs.limbs[3]);
 }
 
 /// A humanoid zombie's pose: the body's twist, the arms' pivots (x, z in

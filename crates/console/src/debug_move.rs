@@ -54,6 +54,14 @@ pub(crate) fn register_debug_move_commands(registry: &mut ConsoleRegistry) {
             .arg(crate::StaticCompleter::new(["overworld", "nether", "end"])),
     );
     registry.register(
+        crate::CommandSpec::new("summon")
+            .usage("summon <mob> — a Minecraft mob in front of you (zombified_piglin, magma_cube, wither_skeleton, ...)")
+            .arg(crate::StaticCompleter::new([
+                "zombified_piglin", "magma_cube", "wither_skeleton", "zombie", "skeleton", "creeper", "spider",
+                "enderman", "slime", "witch", "cow", "pig", "sheep", "chicken", "wolf", "villager", "iron_golem",
+            ])),
+    );
+    registry.register(
         crate::CommandSpec::new("dragon")
             .usage("dragon <kill|reset> — end the Ender Dragon fight, or start it over (in the End)")
             .arg(crate::StaticCompleter::new(["kill", "reset"])),
@@ -149,6 +157,14 @@ pub(crate) fn route_debug_move_commands(
                 echo(format!("skate active={} ready={} controller={:?} tick={} {}",skate.active,skate.preloaded,skate.controller,skate.tick,skate.status),&mut console,&mut line);
             }
 
+            "summon" => match (cmd.args.first(), minecraft.as_deref_mut()) {
+                (Some(mob), Some(ui)) if ui.active => {
+                    let id = if mob.contains(':') { mob.clone() } else { format!("minecraft:{mob}") };
+                    echo(format!("summon: {id}"), &mut console, &mut line);
+                    ui.summon_request = Some(id);
+                }
+                _ => echo("usage: summon <mob> (on the Minecraft map)".into(), &mut console, &mut line),
+            },
             "dragon" => match (cmd.args.first().map(String::as_str), minecraft.as_deref_mut()) {
                 (Some(what @ ("kill" | "reset")), Some(ui)) if ui.active => {
                     ui.dragon_request = Some(what.to_owned());

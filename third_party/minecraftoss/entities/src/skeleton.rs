@@ -15,6 +15,9 @@ pub enum SkeletonKind {
     Bogged,
     /// `Parched`: its arrows weaken.
     Parched,
+    /// `WitherSkeleton`: the Nether fortress's; fire immune, taller, with a
+    /// stone sword in place of a bow.
+    WitherSkeleton,
 }
 
 impl SkeletonKind {
@@ -25,6 +28,7 @@ impl SkeletonKind {
             Self::Stray => "minecraft:stray",
             Self::Bogged => "minecraft:bogged",
             Self::Parched => "minecraft:parched",
+            Self::WitherSkeleton => "minecraft:wither_skeleton",
         }
     }
 
@@ -35,19 +39,31 @@ impl SkeletonKind {
             Self::Stray => "stray",
             Self::Bogged => "bogged",
             Self::Parched => "parched",
+            Self::WitherSkeleton => "wither_skeleton",
         }
     }
 
     /// `#minecraft:burn_in_daylight`: all but the parched.
     pub fn burns_in_daylight(self) -> bool {
-        self != Self::Parched
+        !matches!(self, Self::Parched | Self::WitherSkeleton)
+    }
+
+    /// `EntityType.fireImmune`.
+    pub fn fire_immune(self) -> bool {
+        self == Self::WitherSkeleton
+    }
+
+    /// `WitherSkeleton.createAttributes`' 4 attack damage and its stone
+    /// sword's 4; the archers never strike.
+    pub fn melee_damage(self) -> f32 {
+        if self == Self::WitherSkeleton { 8.0 } else { 2.0 }
     }
 
     /// `createAttributes`: bogged and parched have 16 health.
     pub fn max_health(self) -> f32 {
         match self {
             Self::Bogged | Self::Parched => 16.0,
-            Self::Skeleton | Self::Stray => 20.0,
+            Self::Skeleton | Self::Stray | Self::WitherSkeleton => 20.0,
         }
     }
 
@@ -65,7 +81,7 @@ impl SkeletonKind {
     /// plain arrow's `POTION_DURATION_SCALE` is 1).
     pub fn arrow_effect(self) -> Option<(EffectKind, u32)> {
         match self {
-            Self::Skeleton => None,
+            Self::Skeleton | Self::WitherSkeleton => None,
             Self::Stray => Some((EffectKind::Slowness, 600)),
             Self::Bogged => Some((EffectKind::Poison, 100)),
             Self::Parched => Some((EffectKind::Weakness, 600)),
@@ -116,10 +132,15 @@ impl Skeleton {
         let mut skeleton = Self::new(position);
         skeleton.kind = kind;
         skeleton.health = kind.max_health();
+        if kind == SkeletonKind::WitherSkeleton {
+            // `EntityTypes.WITHER_SKELETON`: 0.7 by 2.4; a sword, no bow.
+            skeleton.body = Body::new(position, 0.7, 2.4);
+            skeleton.holds_bow = false;
+        }
         skeleton
     }
 
     pub fn eye_height(&self) -> f32 {
-        1.74
+        if self.kind == SkeletonKind::WitherSkeleton { 2.1 } else { 1.74 }
     }
 }

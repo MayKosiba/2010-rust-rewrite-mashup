@@ -1034,6 +1034,14 @@ fn update(
         *travel = Some(Travel { to, portal: false });
     }
     *last_feet = feet;
+    // The console's `summon`: three blocks ahead, facing the player.
+    if let Some(kind) = ui.summon_request.take()
+        && let Some(entities) = entities.as_mut()
+    {
+        let yaw = f64::from(mc_yaw).to_radians();
+        let at = [feet[0] - yaw.sin() * 3.0, feet[1] + 0.5, feet[2] + yaw.cos() * 3.0];
+        entities.summon(&kind, at, mc_yaw + 180.0);
+    }
 
     // The dragon fight, in the End: set up once the island's centre has
     // generated, then its tick and what it does to the world and player.

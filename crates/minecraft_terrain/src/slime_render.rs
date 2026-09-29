@@ -48,6 +48,7 @@ pub fn append_slimes<'a>(
     let partial = partial.clamp(0.0, 1.0);
     // Each mob's first vertex and overlay (`getOverlayCoords`).
     let mut marks = Vec::new();
+    let magma_region = atlas.entity_region(&ResourceId::parse("minecraft:entity/slime/magmacube").unwrap());
     for entity in slimes {
         let slime = &entity.slime;
         let Some(mob) = poses.pose(entity.id, partial) else { continue };
@@ -59,6 +60,23 @@ pub fn append_slimes<'a>(
         // `extractRenderState`: the squash between ticks.
         let squish = slime.previous_squish + (slime.squish - slime.previous_squish) * partial;
         let scale = size_and_squish(slime.size, squish);
+        if slime.magma {
+            // `MagmaCubeRenderer`: full block light, and `MagmaCubeModel`'s
+            // eight slices spreading apart as it stretches, round its core.
+            let spread = squish.max(0.0);
+            for i in 0..8 {
+                let uv = match i {
+                    2 => [24., 10.],
+                    3 => [24., 19.],
+                    _ => [0., i as f32],
+                };
+                let y = 16.0 + i as f32;
+                let lift = -(4.0 - i as f32) * spread * 1.7;
+                cube_scaled(mesh, feet, rotation, scale, magma_region, sky, 15.0, [-4., y, -4.], [4., y + 1.0, 4.], uv, [0., lift, 0.], Quat::IDENTITY, [1.0; 3], [64., 32.], None, false);
+            }
+            cube_scaled(mesh, feet, rotation, scale, magma_region, sky, 15.0, [-2., 18., -2.], [2., 22., 2.], [0., 16.], [0.0; 3], Quat::IDENTITY, [1.0; 3], [64., 32.], None, false);
+            continue;
+        }
         for (from, to, uv) in INNER {
             cube_scaled(mesh, feet, rotation, scale, region, sky, block, from, to, uv, [0.0; 3], Quat::IDENTITY, [1.0; 3], [64., 32.], None, false);
         }

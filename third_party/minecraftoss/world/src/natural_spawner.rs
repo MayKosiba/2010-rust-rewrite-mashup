@@ -39,6 +39,10 @@ pub trait SpawnLevel {
     fn sky_brightness(&mut self, pos: BlockPos) -> i32;
     /// `getBrightness(LightLayer.BLOCK, pos)`.
     fn block_brightness(&mut self, pos: BlockPos) -> i32;
+    /// Whether a nether fortress piece's box holds `pos`.
+    fn in_fortress_piece(&self, _pos: BlockPos) -> bool {
+        false
+    }
     /// `getSkyDarken`.
     fn sky_darken(&self) -> i32 {
         0
@@ -222,6 +226,11 @@ enum Rules {
     Stray,
     /// `Slime.checkSlimeSpawnRules` (swamp surfaces, slime chunks).
     Slime,
+    /// `ZombifiedPiglin.checkZombifiedPiglinSpawnRules`: any light, not on
+    /// nether wart blocks.
+    ZombifiedPiglin,
+    /// `MagmaCube.checkMagmaCubeSpawnRules`: anywhere out of peaceful.
+    MagmaCube,
     /// `Bat.checkBatSpawnRules` (below the surface, in the dark).
     Bat,
     /// `GlowSquid.checkGlowSquidSpawnRules` (deep, dark water).
@@ -282,13 +291,17 @@ fn type_info(kind: &str) -> Option<TypeInfo> {
         "spider" => (1.4, 0.9, Placement::OnGround, MotionBlockingNoLeaves, false, false),
         "enderman" => (0.6, 2.9, Placement::OnGround, MotionBlockingNoLeaves, false, false),
         "slime" => (0.52, 0.52, Placement::OnGround, MotionBlockingNoLeaves, false, false),
+        // The Nether's (`EntityTypes`, all fire immune).
+        "zombified_piglin" => (0.6, 1.95, Placement::OnGround, MotionBlockingNoLeaves, true, false),
+        "wither_skeleton" => (0.7, 2.4, Placement::OnGround, MotionBlockingNoLeaves, true, false),
+        "magma_cube" => (0.52, 0.52, Placement::OnGround, MotionBlockingNoLeaves, true, false),
         "zombie_horse" => (1.396_484_4, 1.6, Placement::OnGround, MotionBlockingNoLeaves, false, false),
         "bat" => (0.5, 0.9, Placement::OnGround, MotionBlockingNoLeaves, false, false),
         "glow_squid" => (0.8, 0.8, Placement::InWater, MotionBlockingNoLeaves, false, false),
         _ => return None,
     };
     let short = kind.trim_start_matches("minecraft:");
-    let monster = matches!(short, "zombie" | "zombie_villager" | "witch" | "skeleton" | "creeper" | "spider" | "enderman" | "husk" | "stray" | "bogged" | "parched");
+    let monster = matches!(short, "zombie" | "zombie_villager" | "witch" | "skeleton" | "creeper" | "spider" | "enderman" | "husk" | "stray" | "bogged" | "parched" | "zombified_piglin" | "wither_skeleton");
     let rules = match short {
         _ if animal_rules => Rules::Animal,
         "wolf" => Rules::SpawnableOn("minecraft:wolves_spawnable_on"),
@@ -300,6 +313,8 @@ fn type_info(kind: &str) -> Option<TypeInfo> {
         "stray" => Rules::Stray,
         "camel_husk" => Rules::Other,
         "slime" => Rules::Slime,
+        "zombified_piglin" => Rules::ZombifiedPiglin,
+        "magma_cube" => Rules::MagmaCube,
         "bat" => Rules::Bat,
         "glow_squid" => Rules::GlowSquid,
         _ if monster => Rules::Monster,
@@ -309,11 +324,11 @@ fn type_info(kind: &str) -> Option<TypeInfo> {
         _ if monster => Walk::Monster,
         // Cube mobs and squid keep `PathfinderMob`'s 0; bats are no
         // pathfinders (`Mob.checkSpawnRules`).
-        "slime" | "bat" | "glow_squid" => Walk::Neutral,
+        "slime" | "magma_cube" | "bat" | "glow_squid" => Walk::Neutral,
         _ => Walk::Animal,
     };
     // Animals stay (`Animal.removeWhenFarAway`) except the overrides.
-    let remove_far = monster || matches!(short, "slime" | "zombie_horse" | "axolotl" | "bat" | "glow_squid");
+    let remove_far = monster || matches!(short, "slime" | "magma_cube" | "zombie_horse" | "axolotl" | "bat" | "glow_squid");
     let cluster = match short {
         "horse" | "donkey" | "mule" | "llama" | "camel" | "zombie_horse" => 6,
         "wolf" => 8,
@@ -328,6 +343,9 @@ pub struct CreatureSpawns {
     creatures: Vec<Creatures>,
     /// Each biome's spawn lists by `MobCategory` (spawning categories).
     by_category: Vec<[Creatures; spawning::MobCategory::COUNT]>,
+    /// `NetherFortressStructure.FORTRESS_ENEMIES`: the fortress's monster
+    /// spawn override, from its structure definition.
+    fortress: Creatures,
     /// Each biome's `spawn_costs`: energy budget and charge by type.
     costs: Vec<std::collections::HashMap<String, (f64, f64)>>,
     reduced_water_ambient: Option<TagId>,
@@ -435,6 +453,16 @@ impl CreatureSpawns {
         }
         let sounds = |kind: &str| -> Result<Vec<String>, String> { Ok(pack.list(kind)?.into_iter().map(|id| id.as_str().to_owned()).collect()) };
         let tag = |tags: &minecraftoss_core::tags::Tags, name: &str| tags.id(name).ok_or_else(|| format!("unknown tag {name}"));
+        let mut fortress = Creatures::default();
+        if let Ok(json) = pack.read_json("worldgen/structure", &minecraftoss_core::Identifier::parse("minecraft:fortress")?) {
+            for entry in json["spawn_overrides"]["monster"]["spawns"].as_array().into_iter().flatten() {
+                let kind = entry["type"].as_str().ok_or("spawner lacks a type")?.to_owned();
+                let weight = entry["weight"].as_i64().ok_or("spawner lacks a weight")? as i32;
+                let (min, max, constant) = int_provider(&entry["count"])?;
+                fortress.total += weight;
+                fortress.entries.push(SpawnerData { kind, weight, min, max, constant });
+            }
+        }
         let dimension = pack.read_json("dimension_type", &minecraftoss_core::Identifier::parse(dimension_type)?)?;
         // `DimensionType.monsterSpawnLightTest`: a constant or uniform int.
         let light_test = &dimension["monster_spawn_light_level"];
@@ -449,6 +477,7 @@ impl CreatureSpawns {
             registries: registries_arc.clone(),
             creatures,
             by_category,
+            fortress,
             costs,
             reduced_water_ambient: registries.biome_tags.id("minecraft:reduced_water_ambient_spawns"),
             monster_block_light_limit: dimension["monster_spawn_block_light_limit"].as_i64().unwrap_or(0) as i32,

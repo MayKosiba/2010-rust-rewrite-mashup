@@ -84,6 +84,10 @@ struct Updater {
 /// A dimension's loaded FULL chunks and their simulation state.
 pub struct Level<'a> {
     pub lib: &'a Library,
+    /// Per chunk, the boxes of nether fortress pieces reaching into it
+    /// (`StructureManager.getStructureWithPieceAt` for the fortress), for
+    /// its spawn overrides. Filled by whoever loads chunks with structures.
+    pub fortress_pieces: minecraftoss_core::fast_hash::FxHashMap<ChunkPos, Vec<[i32; 6]>>,
     chunks: minecraftoss_core::fast_hash::FxHashMap<ChunkPos, Chunk>,
     min_y: i32,
     height: i32,
@@ -238,6 +242,7 @@ impl<'a> Level<'a> {
             hopper_ticked: HashMap::new(),
             dispensing_slot: None,
             unsupported: Vec::new(),
+            fortress_pieces: Default::default(),
             sky: None,
             entities: Vec::new(),
             spawned: Vec::new(),

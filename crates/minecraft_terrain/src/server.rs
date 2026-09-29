@@ -22,6 +22,8 @@ pub enum PlayerEdit {
 
 pub struct ServerSim {
     level: Level<'static>,
+    /// The generator's structures, for the fortress pieces each chunk holds.
+    worldgen: &'static WorldGen,
     states: Arc<BlockStates>,
     /// Mobs, ticked after the level each tick.
     mobs: minecraftoss_entities::world::EntityWorld,
@@ -197,6 +199,7 @@ impl ServerSim {
         mobs.pois = minecraftoss_entities::poi::PoiManager::new(range.start >> 4, (range.end - 1) >> 4);
         Self {
             level,
+            worldgen,
             states,
             mobs,
             mob_tables,
@@ -361,6 +364,7 @@ impl ServerSim {
         if !fresh {
             return;
         }
+        self.note_fortress_pieces(chunk.pos);
         self.load_pois(chunk);
         let saved = self.storage.as_ref().and_then(|storage| {
             storage.load_entities(chunk.pos).unwrap_or_else(|e| {
@@ -370,6 +374,30 @@ impl ServerSim {
         });
         for tag in saved.unwrap_or_else(|| chunk.generation.entities.clone()) {
             self.add_saved_entity(tag);
+        }
+    }
+
+    /// The boxes of the nether fortress pieces reaching into a chunk, for the
+    /// fortress's spawn override.
+    fn note_fortress_pieces(&mut self, pos: ChunkPos) {
+        let wg = self.worldgen;
+        let (x0, z0) = (pos.min_block_x(), pos.min_block_z());
+        let mut boxes = Vec::new();
+        for (id, starts) in wg.structures.references(&wg.library, &wg.terrain, pos) {
+            if wg.structures.defs[usize::from(id.0)].name != "minecraft:fortress" {
+                continue;
+            }
+            for start in starts {
+                for piece in start.pieces.lock().expect("structure pieces").iter() {
+                    let b = piece.base().bbox;
+                    if b.max_x >= x0 && b.min_x <= x0 + 15 && b.max_z >= z0 && b.min_z <= z0 + 15 {
+                        boxes.push([b.min_x, b.min_y, b.min_z, b.max_x, b.max_y, b.max_z]);
+                    }
+                }
+            }
+        }
+        if !boxes.is_empty() {
+            self.level.fortress_pieces.insert(pos, boxes);
         }
     }
 
@@ -654,6 +682,7 @@ impl ServerSim {
     pub fn unload_chunk(&mut self, pos: ChunkPos) {
         self.save_chunk_entities(pos, true);
         self.level.remove_chunk(pos);
+        self.level.fortress_pieces.remove(&pos);
         self.mobs.pois.unload_chunk(pos.x, pos.z);
     }
 

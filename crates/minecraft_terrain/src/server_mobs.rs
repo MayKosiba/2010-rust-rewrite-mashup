@@ -522,10 +522,11 @@ pub fn spawn_saved(world: &mut EntityWorld, tag: &Tag) -> Option<u64> {
         }
         // Monsters and bats natural spawning makes. Riders (jockeys) wait
         // dormant with their vehicle.
-        "minecraft:zombie" | "minecraft:husk" | "minecraft:zombie_villager" if tag.get("Passengers").is_none() => {
+        "minecraft:zombie" | "minecraft:husk" | "minecraft:zombie_villager" | "minecraft:zombified_piglin" if tag.get("Passengers").is_none() => {
             let mut zombie = minecraftoss_entities::zombie::Zombie::new(pos);
             zombie.kind = match kind {
                 "minecraft:husk" => ZombieKind::Husk,
+                "minecraft:zombified_piglin" => ZombieKind::ZombifiedPiglin,
                 "minecraft:zombie_villager" => ZombieKind::ZombieVillager,
                 _ => ZombieKind::Zombie,
             };
@@ -555,9 +556,10 @@ pub fn spawn_saved(world: &mut EntityWorld, tag: &Tag) -> Option<u64> {
             }
             id
         }
-        "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged" | "minecraft:parched" if tag.get("Passengers").is_none() => {
+        "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged" | "minecraft:parched" | "minecraft:wither_skeleton" if tag.get("Passengers").is_none() => {
             use minecraftoss_entities::skeleton::SkeletonKind;
             let kind = match kind {
+                "minecraft:wither_skeleton" => SkeletonKind::WitherSkeleton,
                 "minecraft:stray" => SkeletonKind::Stray,
                 "minecraft:bogged" => SkeletonKind::Bogged,
                 "minecraft:parched" => SkeletonKind::Parched,
@@ -620,10 +622,15 @@ pub fn spawn_saved(world: &mut EntityWorld, tag: &Tag) -> Option<u64> {
             }
             id
         }
-        "minecraft:slime" => {
+        "minecraft:slime" | "minecraft:magma_cube" => {
             // `AbstractCubeMob.readAdditionalSaveData`: `Size` is one short
             // of the size, and the landing state carries over.
-            let mut slime = minecraftoss_entities::slime::Slime::new(pos, int(tag, "Size").unwrap_or(0) + 1);
+            let size = int(tag, "Size").unwrap_or(0) + 1;
+            let mut slime = if kind == "minecraft:magma_cube" {
+                minecraftoss_entities::slime::Slime::magma(pos, size)
+            } else {
+                minecraftoss_entities::slime::Slime::new(pos, size)
+            };
             slime.yaw = yaw;
             slime.persistence_required = persistent;
             slime.was_on_ground = int(tag, "wasOnGround").unwrap_or(0) != 0;
@@ -1086,7 +1093,7 @@ pub fn mob_tags(world: &EntityWorld, keep: impl Fn(DVec3) -> bool, originals: &s
     for e in world.slimes() {
         let slime = &e.slime;
         let fields = vec![("Size", Tag::Int(slime.size - 1)), ("wasOnGround", Tag::Byte(i8::from(slime.was_on_ground)))];
-        add(e.id, "minecraft:slime", &slime.body, slime.yaw, slime.health, slime.persistence_required, fields);
+        add(e.id, slime.type_id(), &slime.body, slime.yaw, slime.health, slime.persistence_required, fields);
     }
     for e in world.creepers() {
         let c = &e.creeper;

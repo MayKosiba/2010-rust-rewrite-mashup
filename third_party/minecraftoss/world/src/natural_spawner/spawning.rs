@@ -366,8 +366,18 @@ impl CreatureSpawns {
         self.costs[usize::from(level.biome(pos).0)].get(kind).copied()
     }
 
-    /// A biome's spawn list for a category (`mobsAt` without structures).
+    /// A position's spawn list for a category (`NaturalSpawner.mobsAt`): a
+    /// nether fortress's monsters inside one of its pieces over its bricks
+    /// (`isInNetherFortressBounds`), else the biome's. Other structures'
+    /// overrides are not ported.
     fn mobs_at(&self, level: &dyn SpawnLevel, category: MobCategory, pos: BlockPos) -> &Creatures {
+        if category == MobCategory::Monster && level.in_fortress_piece(pos) {
+            let blocks = &self.registries.blocks;
+            let below = level.block(BlockPos::new(pos.x, pos.y - 1, pos.z));
+            if blocks.block(blocks.block_of(below)).name.to_string() == "minecraft:nether_bricks" {
+                return &self.fortress;
+            }
+        }
         let biome = level.biome(pos);
         &self.by_category[usize::from(biome.0)][category as usize]
     }
@@ -563,6 +573,14 @@ impl CreatureSpawns {
                 self.dark_enough(level, context, pos) && self.mob_spawn_rules(level, kind, info, pos) && level.sky_brightness(sky.below()) >= 15
             }
             Rules::Slime => self.slime_spawn_rules(level, context, kind, info, pos),
+            Rules::ZombifiedPiglin => {
+                let blocks = &self.registries.blocks;
+                let below = level.block(BlockPos::new(pos.x, pos.y - 1, pos.z));
+                context.difficulty != 0
+                    && self.mob_spawn_rules(level, kind, info, pos)
+                    && blocks.block(blocks.block_of(below)).name.as_str() != "minecraft:nether_wart_block"
+            }
+            Rules::MagmaCube => context.difficulty != 0,
             Rules::Bat => self.bat_spawn_rules(level, kind, info, pos),
             // `pos.y <= seaLevel - 33`, unlit, in water: no random draws.
             Rules::GlowSquid => {
@@ -802,6 +820,14 @@ impl CreatureSpawns {
                 let root = self.finalize_zombie(level, context, tag, pos, difficulty, group, &mut own);
                 return self.finalize_husk(level, context, root, pos, difficulty, natural);
             }
+            // `ZombifiedPiglin`: a zombie's finalizing, its equipment a
+            // golden sword (`populateDefaultEquipmentSlots`).
+            "minecraft:zombified_piglin" => {
+                finalize_mob(&mut tag, &mut RandomRef(level.random()));
+                let mut root = self.finalize_zombie(level, context, tag, pos, difficulty, group, &mut own);
+                equip(&mut root, "mainhand", "minecraft:golden_sword");
+                return root;
+            }
             "minecraft:zombie" | "minecraft:zombie_villager" => {
                 if kind == "minecraft:zombie_villager" {
                     // The constructor's profession, then `finalizeVillagerType`.
@@ -822,6 +848,12 @@ impl CreatureSpawns {
             "minecraft:skeleton" | "minecraft:stray" | "minecraft:bogged" | "minecraft:parched" => {
                 finalize_mob(&mut tag, &mut RandomRef(level.random()));
                 self.finalize_skeleton(level, context, &mut tag, difficulty);
+            }
+            // `WitherSkeleton`: a stone sword in place of the bow.
+            "minecraft:wither_skeleton" => {
+                finalize_mob(&mut tag, &mut RandomRef(level.random()));
+                self.finalize_skeleton(level, context, &mut tag, difficulty);
+                equip(&mut tag, "mainhand", "minecraft:stone_sword");
             }
             "minecraft:spider" => {
                 finalize_mob(&mut tag, &mut RandomRef(level.random()));
@@ -850,7 +882,7 @@ impl CreatureSpawns {
                 level.random().next_f32();
                 finalize_mob(&mut tag, &mut RandomRef(level.random()));
             }
-            "minecraft:slime" => {
+            "minecraft:slime" | "minecraft:magma_cube" => {
                 // `AgeableMob.finalizeSpawn` without babies, `Mob`'s part,
                 // then `AbstractCubeMob.setSpawnSize`.
                 if matches!(group, MonsterGroup::None) {

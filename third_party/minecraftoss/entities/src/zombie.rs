@@ -13,6 +13,9 @@ pub enum ZombieKind {
     Husk,
     /// `ZombieVillager`: never drowns.
     ZombieVillager,
+    /// `ZombifiedPiglin`: the Nether's; fire immune, never burns or drowns,
+    /// neutral until hurt, when its kind nearby joins in.
+    ZombifiedPiglin,
 }
 
 impl ZombieKind {
@@ -23,6 +26,7 @@ impl ZombieKind {
             Self::Drowned => "minecraft:drowned",
             Self::Husk => "minecraft:husk",
             Self::ZombieVillager => "minecraft:zombie_villager",
+            Self::ZombifiedPiglin => "minecraft:zombified_piglin",
         }
     }
 
@@ -33,12 +37,24 @@ impl ZombieKind {
             Self::Drowned => "drowned",
             Self::Husk => "husk",
             Self::ZombieVillager => "zombie_villager",
+            Self::ZombifiedPiglin => "zombified_piglin",
         }
     }
 
     /// `Zombie.isSunSensitive`: all but husks burn in daylight.
     pub fn burns_in_daylight(self) -> bool {
-        self != Self::Husk
+        !matches!(self, Self::Husk | Self::ZombifiedPiglin)
+    }
+
+    /// `EntityType.fireImmune`.
+    pub fn fire_immune(self) -> bool {
+        self == Self::ZombifiedPiglin
+    }
+
+    /// `Monster.createMonsterAttributes`' attack damage: a zombified
+    /// piglin's is 5, the others' 3.
+    pub fn attack_damage(self) -> f32 {
+        if self == Self::ZombifiedPiglin { 5.0 } else { 3.0 }
     }
 
     /// `convertsInWater` and `convertsToWhenDrowning`: a zombie becomes a
@@ -47,7 +63,7 @@ impl ZombieKind {
         match self {
             Self::Zombie => Some(Self::Drowned),
             Self::Husk => Some(Self::Zombie),
-            Self::Drowned | Self::ZombieVillager => None,
+            Self::Drowned | Self::ZombieVillager | Self::ZombifiedPiglin => None,
         }
     }
 
@@ -101,6 +117,22 @@ impl Zombie {
         }
     }
 
+    /// `Mob.doHurtTarget`'s damage: the type's attack damage with its main
+    /// hand weapon's (`ATTACK_DAMAGE` modifiers: a sword's or shovel's
+    /// damage less the base 1).
+    pub fn melee_damage(&self) -> f32 {
+        let weapon = match self.main_hand.as_deref() {
+            Some("minecraft:wooden_sword" | "minecraft:golden_sword") => 3.0,
+            Some("minecraft:stone_sword") => 4.0,
+            Some("minecraft:iron_sword") => 5.0,
+            Some("minecraft:diamond_sword") => 6.0,
+            Some("minecraft:netherite_sword") => 7.0,
+            Some("minecraft:iron_shovel") => 3.5,
+            _ => 0.0,
+        };
+        self.kind.attack_damage() + weapon
+    }
+
     pub fn set_baby(&mut self, baby: bool) {
         self.baby = baby;
         self.body.width = if baby { 0.49 } else { 0.6 };
@@ -114,6 +146,7 @@ impl Zombie {
                 ZombieKind::Husk => 0.825,
                 ZombieKind::ZombieVillager => 0.67,
                 ZombieKind::Zombie | ZombieKind::Drowned => 0.775,
+                ZombieKind::ZombifiedPiglin => 0.97,
             }
         } else {
             1.74

@@ -44,15 +44,23 @@ impl SlimeEntity {
 
     /// The sound `name` of its size (`isTiny` slimes use the small ones).
     fn sound(&self, name: &str) -> &'static str {
-        match (name, self.slime.tiny()) {
-            ("hurt", true) => "entity.slime.hurt_small",
-            ("hurt", false) => "entity.slime.hurt",
-            ("death", true) => "entity.slime.death_small",
-            ("death", false) => "entity.slime.death",
-            ("jump", true) => "entity.slime.jump_small",
-            ("jump", false) => "entity.slime.jump",
-            ("squish", true) => "entity.slime.squish_small",
-            _ => "entity.slime.squish",
+        match (self.slime.magma, name, self.slime.tiny()) {
+            // `MagmaCube`'s sounds (its jump has no small one).
+            (true, "hurt", true) => "entity.magma_cube.hurt_small",
+            (true, "hurt", false) => "entity.magma_cube.hurt",
+            (true, "death", true) => "entity.magma_cube.death_small",
+            (true, "death", false) => "entity.magma_cube.death",
+            (true, "jump", _) => "entity.magma_cube.jump",
+            (true, "squish", true) => "entity.magma_cube.squish_small",
+            (true, _, _) => "entity.magma_cube.squish",
+            (false, "hurt", true) => "entity.slime.hurt_small",
+            (false, "hurt", false) => "entity.slime.hurt",
+            (false, "death", true) => "entity.slime.death_small",
+            (false, "death", false) => "entity.slime.death",
+            (false, "jump", true) => "entity.slime.jump_small",
+            (false, "jump", false) => "entity.slime.jump",
+            (false, "squish", true) => "entity.slime.squish_small",
+            (false, _, _) => "entity.slime.squish",
         }
     }
 
@@ -63,6 +71,8 @@ impl SlimeEntity {
             self.no_action_time = 0;
         }
         let max = self.slime.max_health();
+        // A magma cube's armour (`MagmaCube.setSize`: 3 a size step).
+        let amount = if self.slime.magma { crate::health::damage_after_armor(amount, self.slime.armor(), 0.0) } else { amount };
         let result = self.slime.damage.hurt_generic(&mut self.slime.health, max, amount);
         let position = self.position();
         self.slime.damage.place_death(result, position, self.slime.body.fire_ticks > 0);
@@ -134,6 +144,10 @@ impl SlimeEntity {
                 if delay <= 0 {
                     // `getJumpDelay`, a third of it when aggressive.
                     let mut next = self.random.next_int(20) as i32 + 10;
+                    // `MagmaCube.getJumpDelay`: four times a slime's.
+                    if self.slime.magma {
+                        next *= 4;
+                    }
                     if ai.state.cube.aggressive {
                         next /= 3;
                     }
@@ -142,7 +156,7 @@ impl SlimeEntity {
                     // `doPlayJumpSound` (every size) at `getSoundPitch`.
                     let (a, b) = (self.random.next_float(), self.random.next_float());
                     let pitch = ((a - b) * 0.2 + 1.0) * if tiny { 1.4 } else { 0.8 };
-                    let event = if tiny { "entity.slime.jump_small" } else { "entity.slime.jump" };
+                    let event = if self.slime.magma { "entity.magma_cube.jump" } else if tiny { "entity.slime.jump_small" } else { "entity.slime.jump" };
                     self.voices.push((Voice::Event(event, volume, pitch), position));
                 } else {
                     ai.sideways = 0.0;
@@ -190,7 +204,12 @@ impl SlimeEntity {
             }
             let (a, b) = (self.random.next_float(), self.random.next_float());
             let pitch = ((a - b) * 0.2 + 1.0) / 0.8;
-            let event = if slime.tiny() { "entity.slime.squish_small" } else { "entity.slime.squish" };
+            let event = match (slime.magma, slime.tiny()) {
+                (true, true) => "entity.magma_cube.squish_small",
+                (true, false) => "entity.magma_cube.squish",
+                (false, true) => "entity.slime.squish_small",
+                (false, false) => "entity.slime.squish",
+            };
             self.voices.push((Voice::Event(event, slime.sound_volume(), pitch), slime.body.position));
             slime.target_squish = -0.5;
         } else if !on_ground && slime.was_on_ground {
@@ -349,7 +368,7 @@ impl EntityWorld {
                 let zd = ((n / 2) as f32 - 0.5) * offset;
                 let at = parent.slime.body.position + DVec3::new(f64::from(xd), 0.5, f64::from(zd));
                 let yaw = parent.random.next_float() * 360.0;
-                let mut child = Slime::new(at, half);
+                let mut child = if parent.slime.magma { Slime::magma(at, half) } else { Slime::new(at, half) };
                 child.yaw = yaw;
                 child.persistence_required = parent.slime.persistence_required;
                 children.push((child, parent.no_ai));

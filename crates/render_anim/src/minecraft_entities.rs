@@ -168,6 +168,12 @@ impl Entities {
         self.server.use_block(scene, pos, facing)
     }
 
+    /// The console's `summon`: a mob of `kind` at `position`, facing `yaw`.
+    pub(crate) fn summon(&mut self, kind: &str, position: [f64; 3], yaw: f32) {
+        let _ = yaw;
+        self.server.summon(kind.to_owned(), position, None);
+    }
+
     /// A broken container's contents, spilled where it stood.
     pub(crate) fn spill(&mut self, pos: (i32, i32, i32), stacks: Vec<ItemStack>) {
         for stack in stacks {

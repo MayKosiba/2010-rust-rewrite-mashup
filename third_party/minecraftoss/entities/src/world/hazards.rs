@@ -19,6 +19,11 @@ pub(crate) trait Exposed {
     fn hurt_hazard(&mut self, hazard: Hazard, amount: f32, world: &dyn World, game_time: i64) -> bool;
     fn random(&mut self) -> &mut LegacyRandom;
     fn voices(&mut self) -> &mut Vec<(Voice, DVec3)>;
+    /// `EntityType.fireImmune`: fire and lava never light it, and fire's
+    /// damage never takes.
+    fn fire_immune(&self) -> bool {
+        false
+    }
 }
 
 /// `Entity.baseTick`'s burning: a second's damage (`on_fire`) out of lava
@@ -70,6 +75,7 @@ pub(crate) fn blocks_act<W: World>(mob: &mut impl Exposed, world: &W, old_positi
                 body.fall_distance = 0.0;
             }
             BlockEffect::ClearFreeze => {}
+            BlockEffect::FireIgnite | BlockEffect::LavaIgnite if mob.fire_immune() => {}
             BlockEffect::FireIgnite => {
                 // `BaseFireBlock.fireIgnite`.
                 let body = mob.body();
@@ -137,7 +143,14 @@ fn animal_source(hazard: Hazard) -> DamageSourceKind {
 
 macro_rules! exposed {
     ($ty:ty, $mob:ident, |$e:ident, $h:ident, $a:ident, $w:ident, $t:ident| $hurt:expr) => {
+        exposed!($ty, $mob, |$e, $h, $a, $w, $t| $hurt, immune = |_m| false);
+    };
+    ($ty:ty, $mob:ident, |$e:ident, $h:ident, $a:ident, $w:ident, $t:ident| $hurt:expr, immune = |$m:ident| $immune:expr) => {
         impl Exposed for $ty {
+            fn fire_immune(&self) -> bool {
+                let $m = self;
+                $immune
+            }
             fn body(&mut self) -> &mut Body {
                 &mut self.$mob.body
             }
@@ -146,7 +159,7 @@ macro_rules! exposed {
             }
             #[allow(unused_variables)]
             fn hurt_hazard(&mut self, $h: Hazard, $a: f32, $w: &dyn World, $t: i64) -> bool {
-                if resists(&self.effects, $h) {
+                if resists(&self.effects, $h) || ($h.is_fire() && self.fire_immune()) {
                     return false;
                 }
                 let $e = self;
@@ -165,8 +178,8 @@ macro_rules! exposed {
 exposed!(ZombieEntity, zombie, |e, h, a, w, t| {
     let amount = if h.bypasses_armor() { a } else { damage_after_armor(a, 2.0, 0.0) };
     e.hurt(amount).applied
-});
-exposed!(SkeletonEntity, skeleton, |e, h, a, w, t| e.hurt(a).applied);
+}, immune = |m| m.zombie.kind.fire_immune());
+exposed!(SkeletonEntity, skeleton, |e, h, a, w, t| e.hurt(a).applied, immune = |m| m.skeleton.kind.fire_immune());
 exposed!(CreeperEntity, creeper, |e, h, a, w, t| e.hurt(a).applied);
 exposed!(SpiderEntity, spider, |e, h, a, w, t| e.hurt(a).applied);
 exposed!(VillagerEntity, villager, |e, h, a, w, t| e.hurt_from(a, h.damage_type(), None, t).applied);
@@ -174,7 +187,7 @@ exposed!(BatEntity, bat, |e, h, a, w, t| e.hurt(a).applied);
 exposed!(CowEntity, cow, |e, h, a, w, t| e.hurt(a, animal_source(h)).applied);
 exposed!(PigEntity, pig, |e, h, a, w, t| e.hurt(a, animal_source(h)).applied);
 exposed!(ChickenEntity, chicken, |e, h, a, w, t| e.hurt_with_source(a, animal_source(h)).applied);
-exposed!(super::slimes::SlimeEntity, slime, |e, h, a, w, t| e.hurt(a).applied);
+exposed!(super::slimes::SlimeEntity, slime, |e, h, a, w, t| e.hurt(a).applied, immune = |m| m.slime.magma);
 exposed!(super::endermen::EndermanEntity, enderman, |e, h, a, w, t| e.hurt_by_environment(a, w).applied);
 exposed!(super::golems::IronGolemEntity, golem, |e, h, a, w, t| e.hurt(a).applied);
 exposed!(super::wolves::WolfEntity, wolf, |e, h, a, w, t| e.hurt_from(a, h.damage_type(), None, t).applied);

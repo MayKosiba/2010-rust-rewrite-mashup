@@ -92,6 +92,9 @@ pub struct MinecraftUi {
     /// A dimension the console asked to go to (`overworld`, `nether`,
     /// `end`), for the world to take.
     pub travel_request: Option<String>,
+    /// A mob the console asked to summon in front of the player
+    /// (`minecraft:blaze`).
+    pub summon_request: Option<String>,
     /// A console request for the End's fight (`kill`, `reset`).
     pub dragon_request: Option<String>,
     /// A boss's name and health left, 0 to 1, for the bar at the top.
