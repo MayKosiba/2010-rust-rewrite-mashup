@@ -173,6 +173,9 @@ struct Runtime {
     /// Boxes of each shape id, to reuse an id for a repeated shape.
     shape_ids: HashMap<Vec<[u32; 6]>, u16>,
     was_alive: bool,
+    /// Seconds left to wait, after a world is put in play, for the move to
+    /// its spawn to show in the player's presented position.
+    settling: f64,
     /// This session's world directory: each dimension's chunks are saved
     /// here when the player leaves it, and loaded from here on return.
     world_dir: Option<std::path::PathBuf>,
@@ -568,6 +571,7 @@ fn update(
         shapes,
         shape_ids,
         was_alive,
+        settling,
         day,
         environment_accumulator,
         environment_primed,
@@ -618,9 +622,14 @@ fn update(
         *travel = Some(Travel { to: Dimension::Overworld, portal: false });
         return;
     }
-    if alive && !*was_alive && world.scene.generated_chunk(spawn_chunk).is_some() {
-        // Retried each frame until the authority has the player to move.
-        if authority.0.teleport(local.0, [0.0, 0.0, 0.0]) {
+    if alive && !*was_alive {
+        // Held at the spawn, stopped, each frame until its ground exists
+        // (left where they stood before, over another dimension's void after
+        // travel, they would fall meanwhile), then moved there once as a
+        // teleport: its flag flips each time, so only one may be sent.
+        if world.scene.generated_chunk(spawn_chunk).is_none() {
+            authority.0.set_origin(local.0, [0.0, 0.0, 0.0]);
+        } else if authority.0.teleport(local.0, [0.0, 0.0, 0.0]) {
             diag::info!(World, "Minecraft spawn: moved to the world spawn");
             *was_alive = true;
         }
@@ -628,7 +637,16 @@ fn update(
         *was_alive = false;
     }
 
-    let feet = sim::voxel::to_block(origin, ps.origin);
+    // Until the move to the spawn shows, the presented position is still
+    // where the player stood before (in another dimension, after travel):
+    // the world streams round its spawn meanwhile, or the chunks there (a
+    // new End's platform among them) would drop from under the arrival.
+    if *settling > 0.0 {
+        let [x, y, z] = ps.origin;
+        let arrived = *was_alive && x.hypot(y) < 72.0 && z.abs() < 144.0;
+        *settling = if arrived { 0.0 } else { *settling - time.delta_secs_f64() };
+    }
+    let feet = if *settling > 0.0 { origin } else { sim::voxel::to_block(origin, ps.origin) };
     let block = (
         feet[0].floor() as i32,
         feet[1].floor() as i32,
@@ -1811,6 +1829,7 @@ fn install(
     runtime.shapes.clear();
     runtime.shape_ids.clear();
     runtime.was_alive = false;
+    runtime.settling = 10.0;
 }
 
 fn stop(runtime: &mut Runtime, view: &mut MinecraftWorldView) {
