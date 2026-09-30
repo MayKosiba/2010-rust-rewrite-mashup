@@ -461,6 +461,10 @@ impl PackStack {
             .transpose()
     }
     pub fn texture(&self, id: &ResourceId) -> Result<Option<Vec<u8>>> {
+        // Doom's sprites, from Freedoom's WAD rather than a pack.
+        if id.namespace == "doom" {
+            return Ok(crate::doom::texture_png(&id.path));
+        }
         self.get(id, &format!("textures/{}.png", id.path))
     }
     pub fn animation(&self, id: &ResourceId) -> Result<Option<Value>> {

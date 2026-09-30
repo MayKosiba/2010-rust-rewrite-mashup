@@ -185,6 +185,8 @@ struct Runtime {
     died_away: bool,
     /// The End's dragon fight, kept for the session.
     dragon: crate::minecraft_dragon::Fight,
+    /// Doom's bosses the console summoned.
+    doom: crate::minecraft_doom::Bosses,
     /// Thrown eyes of ender, and the strongholds they seek.
     eyes: crate::minecraft_eyes::Eyes,
     strongholds: crate::minecraft_eyes::Strongholds,
@@ -586,6 +588,7 @@ fn update(
         last_feet,
         died_away,
         dragon,
+        doom,
         eyes,
         strongholds,
         ..
@@ -1116,11 +1119,14 @@ fn update(
         .into_iter()
         .partition(|event| matches!(event, sim::voxel::VoxelEvent::MobShot { .. }));
     let mut fight_effects = Vec::new();
+    let mut doom_effects = Vec::new();
     if let Some(entities) = entities.as_mut() {
         for shot in mob_shots {
             if let sim::voxel::VoxelEvent::MobShot { key, damage, from } = shot {
                 if crate::minecraft_dragon::Fight::owns(key) {
                     fight_effects.push(dragon.shot(key, damage, glam::DVec3::from_array(feet)));
+                } else if crate::minecraft_doom::Bosses::owns(key) {
+                    doom_effects.push(doom.shot(key, damage));
                 } else {
                     entities.shoot(key, damage, from, mc_yaw);
                 }
@@ -1278,6 +1284,58 @@ fn update(
                 minecraft_terrain::scene::Scene::block(scene, p).is_some_and(|b| b.is_opaque())
             }));
             ui.boss = dragon.boss();
+        }
+    }
+    // Doom's bosses: the console's `doomboss` summons one twelve blocks
+    // ahead, facing the player, on the ground there.
+    let here = dimension_index(world.dimension);
+    match ui.doom_request.take().as_deref() {
+        Some("clear") => doom.clear(),
+        Some(name) => match crate::minecraft_doom::Kind::parse(name) {
+            Some(_) if minecraft_terrain::doom::assets().is_none() => {
+                diag::warn!(World, "doomboss: Freedoom's freedoom2.wad was not found (iw4l-artifacts/freedoom, or IW4L_FREEDOOM)");
+            }
+            Some(kind) => {
+                let yaw = f64::from(mc_yaw).to_radians();
+                let (x, z) = (feet[0] - yaw.sin() * 12.0, feet[2] + yaw.cos() * 12.0);
+                let (bx, bz) = (x.floor() as i32, z.floor() as i32);
+                let top = feet[1].floor() as i32;
+                let ground = (top - 24..=top + 16)
+                    .rev()
+                    .find(|&y| {
+                        let solid = |y| minecraft_terrain::scene::Scene::block(&world.scene, (bx, y, bz)).is_some_and(|b| b.is_opaque());
+                        solid(y) && !solid(y + 1)
+                    })
+                    .map_or(feet[1], |y| f64::from(y + 1));
+                doom_effects.push(doom.spawn(kind, here, glam::DVec3::new(x, ground, z), mc_yaw + 180.0));
+            }
+            None => {}
+        },
+        None => {}
+    }
+    {
+        let player = alive.then(|| glam::DVec3::from_array(feet));
+        let scene = &world.scene;
+        doom_effects.push(doom.update(time.delta_secs_f64(), here, player, |p| {
+            minecraft_terrain::scene::Scene::block(scene, p).is_some_and(|b| b.is_opaque())
+        }));
+        if ui.boss.is_none() {
+            ui.boss = doom.boss(here, glam::DVec3::from_array(feet));
+        }
+    }
+    for fx in doom_effects {
+        for (amount, from) in fx.damage {
+            diag::info!(World, "Doom: player hurt {amount} from {:.0?}", from.to_array());
+            let amount = entities.as_ref().map_or(amount, |e| (e.after_armor(amount as f32 * 0.2) / 0.2).round() as i32);
+            sim::voxel::push_player_damage(local.0.0, amount, Some(sim::voxel::to_map(origin, from.to_array())));
+        }
+        if let (Some(sounds), Some(assets)) = (sounds.as_mut(), minecraft_terrain::doom::assets()) {
+            for (name, at, volume) in fx.sounds {
+                if let Some(bytes) = assets.sound(name) {
+                    let at = at.map(|at| Vec3::from_array(sim::voxel::to_map(origin, at.to_array())));
+                    sounds.play_file(format!("doom:{name}"), bytes, at, volume, 1.0);
+                }
+            }
         }
     }
     let eye_events = eyes.update(time.delta_secs_f64());
@@ -1481,6 +1539,7 @@ fn update(
         if world.dimension == Dimension::End {
             boxes.extend(dragon.boxes());
         }
+        boxes.extend(doom.boxes(dimension_index(world.dimension)));
         sim::voxel::set_mob_boxes(boxes);
         entities.tick_scene(&world.scene, mob_ticks);
         let sky_darken = (15.0 - world.environment.sky_light_level()).clamp(0.0, 15.0) as u8;
@@ -1497,6 +1556,7 @@ fn update(
             dragon.append_meshes(&mut meshes.models, &mut meshes.translucent, &world.atlas);
         }
         eyes.append_meshes(&mut meshes.models, &world.atlas);
+        doom.append_meshes(dimension_index(world.dimension), &mut meshes.models, &world.atlas, light, cull_at);
         let raw = |mesh: &minecraft_terrain::mesh::ChunkMesh| {
             (bytemuck::cast_slice::<_, u8>(&mesh.vertices).to_vec(), mesh.indices.clone())
         };
@@ -1758,6 +1818,7 @@ fn stop(runtime: &mut Runtime, view: &mut MinecraftWorldView) {
     runtime.travel = None;
     runtime.containers = Default::default();
     runtime.dragon = Default::default();
+    runtime.doom = Default::default();
     runtime.eyes = Default::default();
     runtime.strongholds = Default::default();
     if let Some(dir) = runtime.world_dir.take() {

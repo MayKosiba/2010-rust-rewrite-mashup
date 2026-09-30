@@ -101,6 +101,9 @@ pub struct MinecraftUi {
     pub summon_request: Option<String>,
     /// A console request for the End's fight (`kill`, `reset`).
     pub dragon_request: Option<String>,
+    /// A console request for Doom's bosses (`cyberdemon`, `mastermind`,
+    /// `clear`).
+    pub doom_request: Option<String>,
     /// A boss's name and health left, 0 to 1, for the bar at the top.
     pub boss: Option<(String, f32)>,
     /// The stack on the cursor.

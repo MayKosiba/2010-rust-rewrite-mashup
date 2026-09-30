@@ -76,6 +76,11 @@ pub(crate) fn register_debug_move_commands(registry: &mut ConsoleRegistry) {
             .usage("dragon <kill|reset> — end the Ender Dragon fight, or start it over (in the End)")
             .arg(crate::StaticCompleter::new(["kill", "reset"])),
     );
+    registry.register(
+        crate::CommandSpec::new("doomboss")
+            .usage("doomboss <cyberdemon|mastermind|clear> — summon one of Doom's bosses ahead of you (Freedoom), or remove them")
+            .arg(crate::StaticCompleter::new(["cyberdemon", "mastermind", "clear"])),
+    );
     if registry.resolve("showpos").is_none() {
         registry.register(
             crate::CommandSpec::new("showpos")
@@ -203,6 +208,14 @@ pub(crate) fn route_debug_move_commands(
                     echo(format!("dragon: {what}"), &mut console, &mut line);
                 }
                 _ => echo("usage: dragon <kill|reset> (in the End)".into(), &mut console, &mut line),
+            },
+
+            "doomboss" => match (cmd.args.first().map(String::as_str), minecraft.as_deref_mut()) {
+                (Some(what @ ("cyberdemon" | "mastermind" | "clear")), Some(ui)) if ui.active => {
+                    ui.doom_request = Some(what.to_owned());
+                    echo(format!("doomboss: {what}"), &mut console, &mut line);
+                }
+                _ => echo("usage: doomboss <cyberdemon|mastermind|clear> (on the Minecraft map)".into(), &mut console, &mut line),
             },
 
             "dimension" | "mc_dimension" => {

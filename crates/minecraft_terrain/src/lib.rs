@@ -26,6 +26,7 @@ pub mod mob_actions;
 pub mod walk_animation;
 pub mod cow_render;
 pub mod dragon_render;
+pub mod doom;
 pub mod sheep_render;
 pub mod pig_render;
 pub mod chicken_render;

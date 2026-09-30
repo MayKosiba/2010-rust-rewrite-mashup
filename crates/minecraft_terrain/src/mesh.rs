@@ -522,6 +522,10 @@ fn build_internal<S: Scene>(scene: &S, packs: &PackStack, preload_blocks: bool) 
             }
         }
     }
+    // Doom's bosses and their shots (`doom`), when Freedoom is there.
+    for id in crate::doom::texture_ids() {
+        textures.insert(id, ());
+    }
     for chunk in scene.chunks() {
         for x in chunk.0 * 16..chunk.0 * 16 + 16 {
             for z in chunk.1 * 16..chunk.1 * 16 + 16 {

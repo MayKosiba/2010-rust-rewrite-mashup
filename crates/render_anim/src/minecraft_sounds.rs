@@ -84,6 +84,12 @@ impl Sounds {
         self.play_depth(packs, event, position, volume, pitch, 0);
     }
 
+    /// Plays a sound file that is not the pack's (Doom's, as WAV) under
+    /// its own cache key.
+    pub(crate) fn play_file(&mut self, key: String, bytes: Arc<[u8]>, position: Option<Vec3>, volume: f32, pitch: f32) {
+        self.queued.push(audio::McSoundRequest { key, bytes, position, volume, pitch, block: sim::voxel::BLOCK });
+    }
+
     fn play_depth(&mut self, packs: &PackStack, event: &str, position: Option<Vec3>, volume: f32, pitch: f32, depth: u8) {
         let key = event.strip_prefix("minecraft:").unwrap_or(event);
         let total: u32 = self.events.get(key).map_or(0, |e| e.iter().map(|x| x.weight).sum());
