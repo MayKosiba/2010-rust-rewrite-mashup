@@ -397,10 +397,14 @@ fn sync_remote_bodies(
             rotation: Quat::from_rotation_z(yaw.to_radians()),
             scale: Vec3::ONE,
         };
-        if skate.active && !skate.bones.is_empty() && client.0 == skate.client {
+        // The skater and the inventory's puppet are the player's live body;
+        // their corpses carry the same client and stay where they fell.
+        let corpse = runtime.next_state.e_type == ET_PLAYER_CORPSE
+            || runtime.pose_e_type == ET_PLAYER_CORPSE as u8;
+        if !corpse && skate.active && !skate.bones.is_empty() && client.0 == skate.client {
             pose = Transform::from_matrix(skate.root);
         }
-        if let Some(puppet) = puppet.as_ref().filter(|p| p.active && client.0 == p.client) {
+        if let Some(puppet) = puppet.as_ref().filter(|p| !corpse && p.active && client.0 == p.client) {
             pose = Transform::from_matrix(puppet.root);
         }
         let marker = RemotePlayer {
@@ -726,14 +730,6 @@ impl<'a> RemotePoseFrame<'a> {
         let is_corpse = runtime.next_state.e_type == ET_PLAYER_CORPSE
             || runtime.pose_e_type == ET_PLAYER_CORPSE as u8;
         let occupation_tr_time = is_corpse.then_some(runtime.next_state.tr_time);
-        // While skating, the skater's own corpses are not drawn: the map
-        // respawns where they fell, so the last one lies under the board.
-        if is_corpse
-            && self.skate.active
-            && u32::try_from(runtime.next_state.client_num).ok() == Some(self.skate.client)
-        {
-            return Ok(PoseOneOutcome::SceneHidden);
-        }
         if is_corpse {
             let victim = u32::try_from(runtime.next_state.client_num).unwrap_or(0);
             clone_corpse_tree_from_victim(
