@@ -18,7 +18,10 @@ from PIL import Image
 
 from pattern_seed import placement
 
-AK_UV_SCALE = 0.772  # weapon_rif_ak47_composite_inputs: g_flUvScale1
+# Case Hardened (aq_oiled) is a legacy paint kit (items_game:
+# use_legacy_model 1): it goes on the AK's CS:GO body with that body's UVs
+# and composite inputs (materials/models/weapons/customization/rif_ak47).
+AK_UV_SCALE = 0.549  # rif_ak47_composite_inputs: g_flUvScale1
 EXTRA = "wiki"  # csgo_customweapon reuses extra_x likewise
 
 
@@ -83,10 +86,10 @@ BRIGHTNESS = 1.8  # aq_oiled: g_flColorBrightness
 
 def bake(root, out, seed=661, size=2048, variant=(False, False, 1.0)):
     ak = f"{root}/weapons/models/ak47"
-    base = load(f"{ak}/ak47_default_color_psd_5b66a23b.png", size)
-    ao = load(f"{ak}/ak47_default_ao_png_b00f6e2e.png", size, "L")
-    masks = load(f"{ak}/materials/composite_inputs/weapon_rif_ak47_masks_tga_dd37657.png", size)
-    cavity = load(f"{ak}/materials/composite_inputs/weapon_rif_ak47_cavity_psd_952ab3.png", size, "L")
+    legacy = f"{root}/materials/models/weapons/customization/rif_ak47"
+    base = load(f"{ak}/ak47_color_psd_1f318532.png", size)
+    ao = load(f"{legacy}/rif_ak47_ao_psd_3cdda94d.png", size, "L")
+    masks = load(f"{legacy}/rif_ak47_masks_psd_cc08789a.png", size)
     pattern = load(f"{root}/materials/models/weapons/customization/paints/antiqued/oiled_psd_9f35e709.png", 2048, "RGB")
     pu, pv = pattern_coords(size, seed, AK_UV_SCALE, *variant)
     paint = sample(pattern, pu, pv)

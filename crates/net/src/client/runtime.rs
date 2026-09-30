@@ -1119,6 +1119,14 @@ pub fn sample_client_input(
     if minecraft.as_ref().is_some_and(|ui| ui.active && ui.holding_item) {
         cmd.buttons &= !(playerstate_iw4::buttons::ATTACK | playerstate_iw4::buttons::ADS);
     }
+    // Holding the CS2 karambit (a knife's stand-in gun): attacking is a
+    // knife attack, and there is nothing to aim.
+    // Holding the CS2 karambit (a knife's stand-in gun): its attack is made
+    // a melee as input (`publish_client_action_input`), and there is
+    // nothing to aim.
+    if minecraft.as_ref().is_some_and(|ui| ui.active && ui.knife_held) {
+        cmd.buttons &= !(playerstate_iw4::buttons::ATTACK | playerstate_iw4::buttons::ADS);
+    }
     look.angles = cmd.angles;
     if let Some((mouse_x, mouse_y)) = remote_mouse {
         cmd.remote_control = remote_control_axes(&actions, mouse_x, mouse_y);

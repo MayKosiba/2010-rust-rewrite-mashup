@@ -43,10 +43,11 @@ export_files "weapons/models/shared/arms/weapon_arms.vmdl_c,weapons/models/knife
     --gltf_export_format glb --gltf_export_materials --gltf_export_animations
 export_files "animation/anims/viewmodel/knife/knife_karambit/,animation/anims/viewmodel/rifle/rifle_ak/" \
     --gltf_export_format glb --gltf_export_animations
-export_files "materials/models/weapons/customization/paints/antiqued/oiled_psd_9f35e709.vtex_c,weapons/models/ak47/materials/"
+export_files "materials/models/weapons/customization/paints/antiqued/oiled_psd_9f35e709.vtex_c,weapons/models/ak47/materials/,materials/models/weapons/customization/rif_ak47/"
 dump_data "weapons/models/shared/arms/weapon_arms.vmdl_c" weapon_arms.data.txt
 dump_data "weapons/models/ak47/weapon_rif_ak47.vmdl_c" weapon_rif_ak47.data.txt
 
+# Case Hardened is a legacy paint kit: CS2 draws it on the AK's CS:GO body.
 echo "baking AK-47 | Case Hardened, seed $SEED"
 "$PY" "$HERE/bake_case_hardened.py" "$EXPORT" "$EXPORT/weapons/models/ak47/ak47_case_hardened.png" "$SEED" 2048
 
@@ -66,8 +67,8 @@ cat > "$EXPORT/spec.json" <<EOF
  {"name": "ak47", "reference_clip": "$A/idle_ak.glb", "texture_limit": 2048,
   "models": [
    {"glb": "weapons/models/shared/arms/weapon_arms.glb", "meshes": ["unnamed"], "data": "weapon_arms.data.txt"},
-   {"glb": "weapons/models/ak47/weapon_rif_ak47.glb", "meshes": ["body_hd"], "data": "weapon_rif_ak47.data.txt",
-    "textures": {"ak47_default_color_psd_5b66a23b.png": "$EXPORT/weapons/models/ak47/ak47_case_hardened.png"}}],
+   {"glb": "weapons/models/ak47/weapon_rif_ak47.glb", "meshes": ["body_legacy"], "data": "weapon_rif_ak47.data.txt",
+    "textures": {"ak47_color_psd_1f318532.png": "$EXPORT/weapons/models/ak47/ak47_case_hardened.png"}}],
   "clips": {"draw": "$A/draw_ak.glb", "idle": "$A/idle_ak.glb", "shoot": "$A/shoot1_ak.glb", "reload": "$A/reload_ak.glb",
             "inspect": "$A/lookat01_ak.glb", "inspect2": "$A/lookat03_ak.glb"}}
 ]}

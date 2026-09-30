@@ -177,9 +177,9 @@ struct Runtime {
     /// Boxes of each shape id, to reuse an id for a repeated shape.
     shape_ids: HashMap<Vec<[u32; 6]>, u16>,
     was_alive: bool,
-    /// This life's AK-47 for hotbar slot 7: whether it is in place, and
-    /// when it was last asked for (asked again until it comes).
-    spawn_ak: (bool, Option<f64>),
+    /// This life's spawn guns (`SPAWN_GUNS`): whether each is in its hotbar
+    /// slot, and when it was last asked for (asked again until it comes).
+    spawn_guns: [(bool, Option<f64>); 2],
     /// Seconds left to wait, after a world is put in play, for the move to
     /// its spawn to show in the player's presented position.
     settling: f64,
@@ -585,7 +585,7 @@ fn update(
         shapes,
         shape_ids,
         was_alive,
-        spawn_ak,
+        spawn_guns,
         settling,
         day,
         environment_accumulator,
@@ -1517,34 +1517,39 @@ fn update(
             ui.inventory_open = false;
             ui.screen = frame::McScreen::Inventory;
         }
-        // Every life on the map starts with an AK-47 in hotbar slot 7
-        // (asked of the authority as the console's `give` asks).
-        let ak = weapons.as_ref().and_then(|w| w.0.resolve_index("iw4:weapon/ak47_mp").ok().flatten());
+        // Every life on the map starts with the spawn guns in their hotbar
+        // slots (asked of the authority as the console's `give` asks).
         let now = time.elapsed_secs_f64();
-        if !alive {
-            *spawn_ak = (false, None);
-        } else if let Some(ak) = ak
-            && !spawn_ak.0
-            && *was_alive
-            && !owned.contains(&ak)
-            && spawn_ak.1.is_none_or(|asked| now - asked > 1.5)
-        {
-            // Refused while the authority has the player not yet alive:
-            // asked again a moment later.
-            spawn_ak.1 = Some(now);
-            let request_id = request_ids.allocate();
-            if let Err(error) = action_inbox.push(local.0, sim::ClientAction::GiveWeapon { request_id, weapon: ak }) {
-                diag::warn!(World, "Minecraft spawn: AK-47 not given: {error}");
+        for ((key, _), state) in SPAWN_GUNS.iter().zip(spawn_guns.iter_mut()) {
+            let gun = weapons.as_ref().and_then(|w| w.0.resolve_index(key).ok().flatten());
+            if !alive {
+                *state = (false, None);
+            } else if let Some(gun) = gun
+                && !state.0
+                && *was_alive
+                && !owned.contains(&gun)
+                && state.1.is_none_or(|asked| now - asked > 1.5)
+            {
+                // Refused while the authority has the player not yet alive:
+                // asked again a moment later.
+                state.1 = Some(now);
+                let request_id = request_ids.allocate();
+                if let Err(error) = action_inbox.push(local.0, sim::ClientAction::GiveWeapon { request_id, weapon: gun }) {
+                    diag::warn!(World, "Minecraft spawn: {key} not given: {error}");
+                }
             }
         }
         inventory_ui.sync_weapons(&mut entities.inventory, &owned);
-        if alive
-            && !spawn_ak.0
-            && let Some(ak) = ak
-            && let Some(at) = entities.inventory.slots.iter().position(|s| s.as_ref().and_then(crate::minecraft_inventory::weapon_of) == Some(ak))
-        {
-            entities.inventory.slots.swap(at, 6);
-            spawn_ak.0 = true;
+        for ((key, slot), state) in SPAWN_GUNS.iter().zip(spawn_guns.iter_mut()) {
+            let gun = weapons.as_ref().and_then(|w| w.0.resolve_index(key).ok().flatten());
+            if alive
+                && !state.0
+                && let Some(gun) = gun
+                && let Some(at) = entities.inventory.slots.iter().position(|s| s.as_ref().and_then(crate::minecraft_inventory::weapon_of) == Some(gun))
+            {
+                entities.inventory.slots.swap(at, *slot);
+                state.0 = true;
+            }
         }
         let mut selected = entities.selected;
         let thrown = inventory_ui.apply_input(&mut ui, &mut entities.inventory, &mut selected, containers);
@@ -1828,6 +1833,11 @@ fn set_block(
         }
     }
 }
+
+/// Guns every life on the map starts with, and their hotbar slots (from 0):
+/// the AK-47 in 7, and in 6 the USP .45 with its tactical knife, the CS2
+/// karambit's stand-in (`cs2_viewmodel`).
+const SPAWN_GUNS: [(&str, usize); 2] = [("iw4:weapon/ak47_mp", 6), ("iw4:weapon/usp_tactical_mp", 5)];
 
 /// Puts a loaded world in play with the player's feet at map origin: the
 /// renderer starts over, and a new mob and item server runs for its

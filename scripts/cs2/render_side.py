@@ -9,11 +9,11 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from convert import Glb  # noqa: E402
 
 
-def load_mesh(root):
+def load_mesh(root, body="body_legacy"):
     glb = Glb(f"{root}/weapons/models/ak47/weapon_rif_ak47.glb")
     tris, uvs, pos_all = [], [], []
     for mesh in glb.json["meshes"]:
-        if "body_hd" not in mesh["name"]:
+        if body not in mesh["name"]:
             continue
         for prim in mesh["primitives"]:
             mat = glb.json["materials"][prim["material"]].get("name", "")
@@ -27,7 +27,7 @@ def load_mesh(root):
     return tris
 
 
-def render(tris, texture, size=(900, 300), light=np.array([0.3, 0.5, 0.8]), other_side=True):
+def render(tris, texture, size=(900, 300), light=np.array([0.3, 0.5, 0.8]), other_side=False):
     tex = np.asarray(texture.convert("RGB"), dtype=np.float32) / 255.0
     th, tw = tex.shape[:2]
     allp = np.concatenate([p for p, _, _, _ in tris])

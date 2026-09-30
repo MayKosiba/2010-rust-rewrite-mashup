@@ -27,9 +27,24 @@ const FOV_SCALE: f32 = 1.384;
 /// CS2's default `viewmodel_offset_x/y/z` (1, 1, -1 inches), in view space
 /// (x right, y up, z back), metres.
 const OFFSET: Vec3 = Vec3::new(0.0254, -0.0254, -0.0254);
+/// The view model's size about the eye: the same on screen, but far enough
+/// in depth that MW2's aiming depth of field (which reads the view model
+/// band's depth with its own near plane, 0.1, and blurs what is nearer than
+/// 8 there) leaves it sharp.
+const DEPTH_SCALE: f32 = 100.0;
 /// Crossfade between clips, seconds.
 const BLEND: f32 = 0.12;
 const INSPECT_KEY: KeyCode = KeyCode::KeyI;
+/// The AK's rear sight notch and front sight post, in its model's space
+/// (the legacy body's, metres; tops of the rear sight block and front post
+/// on the bore's centre line).
+const SIGHT_REAR: Vec3 = Vec3::new(0.0, 0.1112, 0.2253);
+const SIGHT_FRONT: Vec3 = Vec3::new(0.0, 0.1125, 0.6239);
+/// How far in front of the eye the rear sight sits when aiming.
+const AIM_DISTANCE: f32 = 0.28;
+/// CS2's view model space (glTF: x left, y up, z forward) to the hand
+/// pass's view space (x right, y up, z back).
+const CS2_TO_VIEW: Mat4 = Mat4::from_cols_array(&[-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
 
 #[derive(Deserialize)]
 struct Doc {
@@ -112,6 +127,8 @@ impl Clip {
 }
 
 struct Model {
+    /// The weapon's root bone, which carries its sights.
+    weapon_bone: Option<usize>,
     parents: Vec<i32>,
     rest: Vec<Trs>,
     inverse_bind: Vec<Mat4>,
@@ -149,6 +166,7 @@ impl Model {
             })
             .collect();
         Ok(Self {
+            weapon_bone: index.get("weapon").copied(),
             parents: doc.skeleton.parents,
             rest: doc.skeleton.rest.iter().map(Trs::from).collect(),
             inverse_bind: doc.skeleton.inverse_bind.iter().map(Mat4::from_cols_array).collect(),
@@ -309,13 +327,14 @@ pub(crate) fn update(
     presented: Res<net::PresentedSnapshot>,
     local: Res<net::LocalPresentClient>,
     weapons: Option<Res<assets::PreparedWeapons>>,
-    (ui, puppet, skate): (Res<frame::MinecraftUi>, Res<frame::InventoryPuppet>, Res<frame::SkateMode>),
+    (mut ui, puppet, skate): (ResMut<frame::MinecraftUi>, Res<frame::InventoryPuppet>, Res<frame::SkateMode>),
     mut covering: ResMut<frame::Cs2Viewmodel>,
     mut view: ResMut<MinecraftWorldView>,
     mut state: Local<State>,
 ) {
     view.cs2_hand = Default::default();
     covering.covering = false;
+    ui.knife_held = false;
     let shown = view.active && ui.active && !skate.active && !puppet.active && !(ui.holding_item && !ui.empty_hand);
     // Hidden a moment (the view weapon can drop out for a frame, as in a
     // melee), the clip keeps its place; dead, it starts over.
@@ -330,13 +349,21 @@ pub(crate) fn update(
 
     let name = weapons.0.name_of(ps.weapon);
     let is_ak = name.starts_with("ak47");
+    // The karambit held as a weapon: MW2's USP .45 with its tactical knife
+    // stands in (its attacks are made melee as it is held).
+    let is_knife = name.starts_with("usp") && name.contains("tactical");
+    ui.knife_held = is_knife;
     let weapon_state = WeaponState::from_i32(ps.weaponstate_primary).ok();
     let melee = matches!(weapon_state, Some(WeaponState::MeleeInit | WeaponState::MeleeFire));
     let reloading = matches!(
         weapon_state,
         Some(WeaponState::Reloading | WeaponState::ReloadStart | WeaponState::ReloadEnd)
     );
-    let knifing = state.playing.is_some_and(|p| p.which == Which::Karambit && !playing_done(&assets, &p));
+    // A slash plays out whatever is in hand (not the karambit's own draw,
+    // idle or inspect).
+    let knifing = state
+        .playing
+        .is_some_and(|p| p.which == Which::Karambit && p.clip.starts_with("light_hit") && !playing_done(&assets, &p));
     if std::env::var_os("IW4L_DEBUG_CS2").is_some() {
         diag::info!(World, "CS2 frame: weapon {} {name} state {:?} melee {melee} knifing {knifing} playing {:?}", ps.weapon, weapon_state, state.playing.map(|p| (p.which, p.clip, p.time)));
     }
@@ -363,6 +390,15 @@ pub(crate) fn update(
             state.play(Which::Ak, "inspect", 1.0, false);
         } else if current.is_some_and(|p| playing_done(&assets, &p)) {
             state.play(Which::Ak, "idle", 1.0, true);
+        }
+    } else if is_knife {
+        let current = state.playing.filter(|p| p.which == Which::Karambit);
+        if current.is_none() || ps.weapon != state.weapon {
+            state.play(Which::Karambit, "draw", 1.0, false);
+        } else if keys.just_pressed(INSPECT_KEY) {
+            state.play(Which::Karambit, "inspect", 1.0, false);
+        } else if current.is_some_and(|p| playing_done(&assets, &p)) {
+            state.play(Which::Karambit, "idle", 1.0, true);
         }
     } else {
         state.reset();
@@ -398,17 +434,30 @@ pub(crate) fn update(
     }
     covering.covering = true;
 
-    // Sprinting lowers and turns the gun; aiming brings it in toward the
-    // middle (CS has neither).
+    // Sprinting lowers and turns the gun (CS has no sprint).
     let sprint = if ps.pm_flags & 0x4000 != 0 { 1.0 } else { 0.0 };
-    let ads = ps.f_weapon_pos_frac.clamp(0.0, 1.0);
-    let place = Mat4::from_translation(OFFSET + Vec3::new(-0.06 * ads, 0.02 * ads - 0.05 * sprint, 0.0))
+    // Aiming down the sights (CS has none for the AK), over MW2's own aim
+    // in and out: the view model turned and moved so that the idle pose's
+    // sights lie on the view's centre line, the clips still moving it
+    // about that.
+    let ads = if playing.which == Which::Ak { ps.f_weapon_pos_frac.clamp(0.0, 1.0) } else { 0.0 };
+    let aim = model
+        .weapon_bone
+        .filter(|_| ads > 0.0)
+        .map(|bone| {
+            let idle = CS2_TO_VIEW * model.skin(&model.locals("idle", 0.0))[bone];
+            let (rear, front) = (idle.transform_point3(SIGHT_REAR), idle.transform_point3(SIGHT_FRONT));
+            let turn = Quat::from_rotation_arc((front - rear).normalize_or(Vec3::NEG_Z), Vec3::NEG_Z);
+            let shift = Vec3::new(0.0, 0.0, -AIM_DISTANCE) - turn * rear;
+            Mat4::from_rotation_translation(Quat::IDENTITY.slerp(turn, ads), shift * ads)
+        })
+        .unwrap_or(Mat4::IDENTITY);
+    let place = Mat4::from_translation(OFFSET * (1.0 - ads) + Vec3::new(0.0, -0.05 * sprint, 0.0))
         * Mat4::from_rotation_x(-0.5 * sprint)
         * Mat4::from_rotation_y(0.35 * sprint)
-        // CS2's view model space (glTF: x left, y up, z forward) to the
-        // hand pass's view space (x right, y up, z back).
-        * Mat4::from_cols_array(&[-1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
-    let fov = Mat4::from_scale(Vec3::new(FOV_SCALE, FOV_SCALE, 1.0));
+        * aim
+        * CS2_TO_VIEW;
+    let fov = Mat4::from_scale(Vec3::new(FOV_SCALE, FOV_SCALE, 1.0) * DEPTH_SCALE);
     let skin = model.skin(&locals);
     let light_dir = Vec3::new(0.35, 0.8, 0.5).normalize();
     let [sky, block] = view.eye_light;

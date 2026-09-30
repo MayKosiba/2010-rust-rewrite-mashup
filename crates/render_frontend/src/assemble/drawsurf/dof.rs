@@ -140,6 +140,7 @@ fn update_dof(
     subject: Res<frame::ViewSubject>,
     camera: Option<Res<render_anim::occupancy::view_kick::SessionViewKick>>,
     mut generation: Local<Option<u64>>,
+    cs2: Option<Res<frame::Cs2Viewmodel>>,
 ) {
     *frame = DofFrame::default();
     if *generation != world.0 {
@@ -224,6 +225,12 @@ fn update_dof(
             scene.view_model_start = range[0] * ads;
             scene.view_model_end = range[1] * ads;
         }
+    }
+    // A CS2 view model draws with the world (the Minecraft hand pass), so
+    // the near blur would take it too: none while it shows.
+    if cs2.as_ref().is_some_and(|cs2| cs2.covering) {
+        scene.near_end = scene.near_start;
+        scene.view_model_end = scene.view_model_start;
     }
     if let Some(distance) = camera.as_ref().and_then(|c| c.killcam_focus_distance) {
         *scene = DepthOfField {

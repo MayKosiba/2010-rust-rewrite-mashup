@@ -101,6 +101,8 @@ pub struct MinecraftUi {
     pub summon_request: Option<String>,
     /// A console request for the End's fight (`kill`, `reset`).
     pub dragon_request: Option<String>,
+    /// The CS2 karambit's stand-in gun is in hand: its attacks are melee.
+    pub knife_held: bool,
     /// A console request for Doom's bosses (`cyberdemon`, `mastermind`,
     /// `clear`).
     pub doom_request: Option<String>,

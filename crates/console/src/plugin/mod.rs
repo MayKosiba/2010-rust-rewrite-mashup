@@ -281,9 +281,10 @@ fn publish_client_action_input(
     mut hud_input: ResMut<frame::HudInputView>,
     settings: Res<frame::GameSettings>,
     mut out: ResMut<ClientActionInput>,
-    (gamepads, active, mut aiming_with_pad): (
+    (gamepads, active, mut aiming_with_pad, mut knife_melee): (
         Query<&bevy::input::gamepad::Gamepad>,
         Res<frame::ActivePad>,
+        Local<bool>,
         Local<bool>,
     ),
 ) {
@@ -440,6 +441,21 @@ fn publish_client_action_input(
         }
     }
     out.scripted_ids = scripted_now;
+    // Holding the CS2 karambit (a knife's stand-in gun): a press of attack
+    // is a press of melee, one knife attack each. The melee it makes is let
+    // go the frame after (its key's release goes to attack), so the next
+    // press is a new one.
+    if minecraft.as_ref().is_some_and(|ui| ui.active && ui.knife_held) {
+        let attack = std::mem::take(&mut out.client.kb.attack);
+        if attack.active || attack.was_pressed {
+            out.client.kb.melee = attack;
+            *knife_melee = true;
+        } else if std::mem::take(&mut *knife_melee) {
+            out.client.kb.melee = Default::default();
+        }
+    } else if std::mem::take(&mut *knife_melee) {
+        out.client.kb.melee = Default::default();
+    }
 
     let (sx, sy) = scripted.take_mouse();
     let (rx, ry) = scripted.mouse_rate().unwrap_or((0.0, 0.0));
