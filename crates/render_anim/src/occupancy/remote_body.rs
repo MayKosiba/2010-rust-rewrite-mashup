@@ -726,6 +726,14 @@ impl<'a> RemotePoseFrame<'a> {
         let is_corpse = runtime.next_state.e_type == ET_PLAYER_CORPSE
             || runtime.pose_e_type == ET_PLAYER_CORPSE as u8;
         let occupation_tr_time = is_corpse.then_some(runtime.next_state.tr_time);
+        // While skating, the skater's own corpses are not drawn: the map
+        // respawns where they fell, so the last one lies under the board.
+        if is_corpse
+            && self.skate.active
+            && u32::try_from(runtime.next_state.client_num).ok() == Some(self.skate.client)
+        {
+            return Ok(PoseOneOutcome::SceneHidden);
+        }
         if is_corpse {
             let victim = u32::try_from(runtime.next_state.client_num).unwrap_or(0);
             clone_corpse_tree_from_victim(
