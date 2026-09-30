@@ -67,6 +67,10 @@ pub struct MinecraftWorldView {
     /// draws them (vanilla's fixed 70 degree hand field of view).
     pub hand: (Vec<u8>, Vec<u32>),
     pub hand_clip: [f32; 16],
+    /// A CS2 first-person weapon with its arms (`cs2_viewmodel`), in the
+    /// hand's space and projection, and its texture's mip levels.
+    pub cs2_hand: (Vec<u8>, Vec<u32>),
+    pub cs2_texture: Option<Arc<Vec<image::RgbaImage>>>,
 }
 
 struct Loaded {
@@ -284,7 +288,9 @@ pub(crate) fn register(app: &mut App) {
             crate::minecraft_armor::draw_player_armor
                 .after(update)
                 .after(crate::occupancy::remote_body::pose_remote_bodies),
-        );
+        )
+        .init_resource::<frame::Cs2Viewmodel>()
+        .add_systems(Update, crate::cs2_viewmodel::update.after(update).in_set(frame::ClientSet::Present));
 }
 
 fn load(seed: i64, world_dir: std::path::PathBuf) -> Result<Loaded, String> {

@@ -937,6 +937,7 @@ pub fn extract_minecraft_world(
     mut celestial_of: Local<Option<(usize, std::sync::Arc<render_gpu::MinecraftAtlasImage>)>>,
     mut clouds_of: Local<Option<(usize, std::sync::Arc<render_gpu::MinecraftClouds>)>>,
     mut cracks_of: Local<Option<(usize, std::sync::Arc<render_gpu::MinecraftAtlasImage>)>>,
+    mut cs2_of: Local<Option<(usize, std::sync::Arc<render_gpu::MinecraftAtlasImage>)>>,
 ) {
     let Some(mut view) = main_world.get_resource_mut::<render_anim::minecraft_world::MinecraftWorldView>() else {
         return;
@@ -984,6 +985,22 @@ pub fn extract_minecraft_world(
     frame.backdrop = view.backdrop;
     frame.hand = std::mem::take(&mut view.hand);
     frame.hand_clip = view.hand_clip;
+    frame.cs2_hand = std::mem::take(&mut view.cs2_hand);
+    frame.cs2_texture = view.cs2_texture.as_ref().map(|levels| {
+        let key = std::sync::Arc::as_ptr(levels) as usize;
+        if let Some((held, converted)) = cs2_of.as_ref()
+            && *held == key
+        {
+            return converted.clone();
+        }
+        let converted = std::sync::Arc::new(render_gpu::MinecraftAtlasImage {
+            width: levels[0].width(),
+            height: levels[0].height(),
+            levels: levels.iter().map(|level| level.as_raw().clone()).collect(),
+        });
+        *cs2_of = Some((key, converted.clone()));
+        converted
+    });
     frame.crack_texture = view.crack_texture.as_ref().map(|image| {
         let key = std::sync::Arc::as_ptr(image) as usize;
         if let Some((held, converted)) = cracks_of.as_ref()

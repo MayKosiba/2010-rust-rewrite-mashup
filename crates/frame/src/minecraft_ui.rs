@@ -141,6 +141,13 @@ pub struct MinecraftUi {
     pub minimap: Option<(Handle<Image>, [f32; 2], [f32; 2])>,
 }
 
+/// Whether a CS2 first-person weapon stands in the MW2 view model's place
+/// (set by `render_anim`'s CS2 view model).
+#[derive(Resource, Default)]
+pub struct Cs2Viewmodel {
+    pub covering: bool,
+}
+
 /// The player's own MW2 body, drawn standing in the inventory's character
 /// box and looking towards the mouse.
 #[derive(Resource, Default, Clone)]

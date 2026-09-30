@@ -90,6 +90,10 @@ pub struct MinecraftWorldFrame {
     /// The first-person hand or held item in view space, and its projection.
     pub hand: (Vec<u8>, Vec<u32>),
     pub hand_clip: [f32; 16],
+    /// A CS2 first-person weapon and arms, drawn as the hand is but from
+    /// their own texture (`cs2_texture`).
+    pub cs2_hand: (Vec<u8>, Vec<u32>),
+    pub cs2_texture: Option<Arc<MinecraftAtlasImage>>,
 }
 
 #[repr(C)]
@@ -133,8 +137,14 @@ struct TerrainGpu {
     entities: [Option<(Buffer, Buffer, u32)>; 5],
     backdrop: Option<Buffer>,
     hand: Option<(Buffer, Buffer, u32)>,
+    cs2_hand: Option<(Buffer, Buffer, u32)>,
+    cs2_texture: Option<(Arc<MinecraftAtlasImage>, TextureView)>,
+    /// Smooth filtering for the CS2 textures (the blocks' is nearest).
+    cs2_sampler: Option<Sampler>,
     sampler: Option<Sampler>,
     bind: Option<BindGroup>,
+    /// `bind` with the CS2 texture and sampler in the atlas's place.
+    cs2_bind: Option<BindGroup>,
     sections: HashMap<[i32; 3], SectionGpu>,
     visible: Vec<[i32; 3]>,
     pipelines: HashMap<(TextureFormat, u32), [RenderPipeline; 11]>,
@@ -260,6 +270,29 @@ fn prepare_terrain(
             usage: BufferUsages::VERTEX,
         })
     });
+    if let Some(texture) = frame.cs2_texture.clone()
+        && gpu.cs2_texture.as_ref().is_none_or(|(held, _)| !Arc::ptr_eq(held, &texture))
+    {
+        let view = upload_atlas(&device, &queue, &texture);
+        gpu.cs2_texture = Some((texture, view));
+        gpu.cs2_bind = None;
+    }
+    let (cs2_vertices, cs2_indices) = std::mem::take(&mut frame.cs2_hand);
+    gpu.cs2_hand = (!cs2_indices.is_empty()).then(|| {
+        (
+            device.create_buffer_with_data(&BufferInitDescriptor {
+                label: Some("iw4l_cs2_hand_vertices"),
+                contents: &cs2_vertices,
+                usage: BufferUsages::VERTEX,
+            }),
+            device.create_buffer_with_data(&BufferInitDescriptor {
+                label: Some("iw4l_cs2_hand_indices"),
+                contents: bytemuck::cast_slice(&cs2_indices),
+                usage: BufferUsages::INDEX,
+            }),
+            cs2_indices.len() as u32,
+        )
+    });
     let (hand_vertices, hand_indices) = std::mem::take(&mut frame.hand);
     gpu.hand = (!hand_indices.is_empty()).then(|| {
         (
@@ -347,6 +380,9 @@ fn prepare_terrain(
             ..default()
         }));
     }
+    if gpu.bind.is_none() {
+        gpu.cs2_bind = None;
+    }
     if gpu.bind.is_none()
         && let (Some(view), Some((_, atlas)), Some((_, celestial)), Some((_, cracks)), Some(sampler)) = (
             gpu.view.as_ref(),
@@ -388,6 +424,42 @@ fn prepare_terrain(
             ],
         );
         gpu.bind = Some(bind);
+    }
+    if gpu.cs2_sampler.is_none() {
+        gpu.cs2_sampler = Some(device.create_sampler(&SamplerDescriptor {
+            label: Some("iw4l_cs2_hand"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: MipmapFilterMode::Linear,
+            ..default()
+        }));
+    }
+    if gpu.cs2_bind.is_none()
+        && let (Some(view), Some((_, texture)), Some((_, celestial)), Some((_, cracks)), Some(sampler)) = (
+            gpu.view.as_ref(),
+            gpu.cs2_texture.as_ref(),
+            gpu.celestial.as_ref(),
+            gpu.crack_texture.as_ref(),
+            gpu.cs2_sampler.as_ref(),
+        )
+    {
+        let layout = registry.bind_group_layout(&device, &layout());
+        gpu.cs2_bind = Some(device.create_bind_group(
+            "iw4l_cs2_hand",
+            &layout,
+            &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(BufferBinding { buffer: view, offset: 0, size: None }),
+                },
+                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(texture) },
+                BindGroupEntry { binding: 2, resource: BindingResource::Sampler(sampler) },
+                BindGroupEntry { binding: 3, resource: BindingResource::TextureView(celestial) },
+                BindGroupEntry { binding: 4, resource: BindingResource::TextureView(cracks) },
+            ],
+        ));
     }
     for pos in std::mem::take(&mut frame.removed) {
         gpu.sections.remove(&pos);
@@ -605,6 +677,18 @@ fn draw_terrain(
         pass.set_vertex_buffer(0, vertices.slice(..));
         pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
         pass.draw_indexed(0..*count, 0, 0..1);
+        pass.set_viewport(vp.x as f32, vp.y as f32, vp.z as f32, vp.w as f32, depth_min, depth_max);
+    }
+    // A CS2 weapon in the view model's place, from its own texture.
+    if let (Some((vertices, indices, count)), Some(cs2_bind)) = (gpu.cs2_hand.as_ref(), gpu.cs2_bind.as_ref()) {
+        let (band_min, band_max) = reverse_z_viewport_depth(super::depth_range::GFX_DEPTH_RANGE_VIEWMODEL);
+        pass.set_viewport(vp.x as f32, vp.y as f32, vp.z as f32, vp.w as f32, band_min, band_max);
+        pass.set_render_pipeline(&hand);
+        pass.set_bind_group(0, cs2_bind, &[]);
+        pass.set_vertex_buffer(0, vertices.slice(..));
+        pass.set_index_buffer(indices.slice(..), IndexFormat::Uint32);
+        pass.draw_indexed(0..*count, 0, 0..1);
+        pass.set_bind_group(0, &bind, &[]);
         pass.set_viewport(vp.x as f32, vp.y as f32, vp.z as f32, vp.w as f32, depth_min, depth_max);
     }
     if let Some((_, vertices, indices, count)) = gpu.clouds.as_ref() {

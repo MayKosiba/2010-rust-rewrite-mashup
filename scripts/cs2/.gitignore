@@ -1,0 +1,4 @@
+export/
+.venv/
+source2viewer/
+__pycache__/

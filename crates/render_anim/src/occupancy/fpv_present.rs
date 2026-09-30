@@ -399,6 +399,7 @@ pub fn occupy_fpv_scene(
     skate: Res<frame::SkateMode>,
     puppet: Option<Res<frame::InventoryPuppet>>,
     minecraft: Option<Res<frame::MinecraftUi>>,
+    cs2: Option<Res<frame::Cs2Viewmodel>>,
     mut submissions: MessageWriter<AnimDObjSceneSubmission>,
     presented: Res<PresentedSnapshot>,
     local: Res<LocalPresentClient>,
@@ -412,6 +413,7 @@ pub fn occupy_fpv_scene(
     if (skate.active && !skate.bones.is_empty())
         || puppet.as_ref().is_some_and(|p| p.active)
         || minecraft.as_ref().is_some_and(|ui| ui.active && ui.holding_item && !ui.empty_hand)
+        || cs2.as_ref().is_some_and(|cs2| cs2.covering)
         || presented.viewweapon_player(local.0).is_none()
         || presented_is_third_person(&presented, local.0, view.in_killcam())
     {

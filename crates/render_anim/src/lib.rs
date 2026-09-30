@@ -39,6 +39,7 @@ pub use plugin::RenderAnimPlugin;
 
 mod minecraft_armor;
 mod minecraft_containers;
+mod cs2_viewmodel;
 mod minecraft_doom;
 mod minecraft_dragon;
 mod minecraft_entities;

@@ -62,6 +62,7 @@ pub(crate) fn register_debug_move_commands(registry: &mut ConsoleRegistry) {
             ])),
     );
     registry.register(crate::CommandSpec::new("mcuse").usage("mcuse — use (right click) with the held Minecraft item"));
+    registry.register(crate::CommandSpec::new("mcslot").usage("mcslot <1-9> — select a hotbar slot (as the number keys)"));
     registry.register(crate::CommandSpec::new("mcinv").usage("mcinv — open or close the Minecraft inventory (as E)"));
     registry.register(
         crate::CommandSpec::new("summon")
@@ -189,6 +190,10 @@ pub(crate) fn route_debug_move_commands(
                     }
                 }
             }
+            "mcslot" => match (cmd.args.first().and_then(|n| n.parse::<usize>().ok()), minecraft.as_deref_mut()) {
+                (Some(n @ 1..=9), Some(ui)) => ui.select = Some(n - 1),
+                _ => echo("usage: mcslot <1-9>".into(), &mut console, &mut line),
+            },
             "mcuse" => {
                 if let Some(ui) = minecraft.as_deref_mut() {
                     ui.use_request = true;
