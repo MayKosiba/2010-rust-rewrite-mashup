@@ -2,3 +2,4 @@ export/
 .venv/
 source2viewer/
 __pycache__/
+exceptions.txt

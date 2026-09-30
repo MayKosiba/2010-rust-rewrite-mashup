@@ -33,8 +33,10 @@ fi
 PY="$HERE/.venv/bin/python"
 mkdir -p "$EXPORT" "$OUT"
 
-export_files() { "$S2V" -i "$VPK" --vpk_filepath "$1" -o "$EXPORT" -d "${@:2}" >/dev/null 2>&1 || true; }
-dump_data() { "$S2V" -i "$VPK" --vpk_filepath "$1" -b DATA 2>/dev/null | grep -v '^Preload\|^Added' > "$EXPORT/$2"; }
+# Run from the export folder: Source2Viewer logs what it cannot read to
+# ./exceptions.txt.
+export_files() { (cd "$EXPORT" && "$S2V" -i "$VPK" --vpk_filepath "$1" -o "$EXPORT" -d "${@:2}" >/dev/null 2>&1) || true; }
+dump_data() { (cd "$EXPORT" && "$S2V" -i "$VPK" --vpk_filepath "$1" -b DATA 2>/dev/null) | grep -v '^Preload\|^Added' > "$EXPORT/$2"; }
 
 echo "exporting models, clips and textures from $CS"
 export_files "weapons/models/shared/arms/weapon_arms.vmdl_c,weapons/models/knife/knife_karambit/weapon_knife_karambit.vmdl_c,weapons/models/ak47/weapon_rif_ak47.vmdl_c" \
