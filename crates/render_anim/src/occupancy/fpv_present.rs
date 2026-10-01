@@ -414,6 +414,7 @@ pub fn occupy_fpv_scene(
         || puppet.as_ref().is_some_and(|p| p.active)
         || minecraft.as_ref().is_some_and(|ui| ui.active && ui.holding_item && !ui.empty_hand)
         || cs2.as_ref().is_some_and(|cs2| cs2.covering)
+        || minecraft.as_ref().is_some_and(|ui| ui.hide_gun)
         || presented.viewweapon_player(local.0).is_none()
         || presented_is_third_person(&presented, local.0, view.in_killcam())
     {

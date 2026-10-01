@@ -195,6 +195,9 @@ struct Runtime {
     died_away: bool,
     /// The End's dragon fight, kept for the session.
     dragon: crate::minecraft_dragon::Fight,
+    /// The console's `dragon stage`: behind, up and right of the skater (map
+    /// units, along their way ahead), wing beat and pitch.
+    dragon_stage: Option<[f64; 6]>,
     /// Doom's bosses the console summoned.
     doom: crate::minecraft_doom::Bosses,
     /// Thrown eyes of ender, and the strongholds they seek.
@@ -607,6 +610,7 @@ fn update(
         last_feet,
         died_away,
         dragon,
+        dragon_stage,
         doom,
         eyes,
         strongholds,
@@ -1277,6 +1281,28 @@ fn update(
         *travel = Some(Travel { to, portal: false });
     }
     *last_feet = feet;
+    // The console's `flatpad`: a flat floor round the player, high up, and
+    // the player stood on its middle (for photos and skating).
+    if let Some((block, half, height)) = ui.flatpad_request.take()
+        && alive
+    {
+        let (cx, cz) = (feet[0].floor() as i32, feet[2].floor() as i32);
+        let floor = minecraft_terrain::scene::Block::new(&block);
+        if world.stream.states.state_of(&floor).is_none() {
+            diag::warn!(World, "flatpad: unknown block {block}");
+        } else {
+            let mut positions = Vec::with_capacity(((2 * half + 1) * (2 * half + 1)) as usize);
+            for x in cx - half..=cx + half {
+                for z in cz - half..=cz + half {
+                    positions.push((x, height, z));
+                }
+            }
+            set_blocks(world, entities.as_mut(), shapes, shape_ids, &positions, &floor);
+            let stand = sim::voxel::to_map(origin, [f64::from(cx) + 0.5, f64::from(height) + 1.05, f64::from(cz) + 0.5]);
+            authority.0.teleport(local.0, stand);
+            diag::info!(World, "flatpad: {} blocks of {block} at y {height}", positions.len());
+        }
+    }
     // The console's `summon`: three blocks ahead, facing the player.
     if let Some(kind) = ui.summon_request.take()
         && let Some(entities) = entities.as_mut()
@@ -1308,7 +1334,31 @@ fn update(
                 fight_effects.push(fx);
             }
             Some("reset") if dragon.started() => fight_effects.push(dragon.reset(world.seed)),
+            Some("unstage") => {
+                *dragon_stage = None;
+                dragon.stage(None);
+            }
+            Some(stage) if stage.starts_with("stage ") => {
+                let v: Vec<f64> = stage.split_whitespace().skip(1).filter_map(|a| a.parse().ok()).collect();
+                *dragon_stage = Some([v[0], v[1], v[2], v.get(3).copied().unwrap_or(0.25), v.get(4).copied().unwrap_or(-10.0), v.get(5).copied().unwrap_or(0.0)]);
+            }
             _ => {}
+        }
+        // Held behind the skater, facing their way ahead (as the photo
+        // camera's), as if chasing them.
+        if let Some([behind, up, right, flap, pitch, turn]) = *dragon_stage {
+            let ahead = skate
+                .photo_forward
+                .map(|f| glam::DVec3::new(f64::from(f.x), 0.0, -f64::from(f.y)))
+                .unwrap_or_else(|| {
+                    let yaw = f64::from(mc_yaw).to_radians();
+                    glam::DVec3::new(-yaw.sin(), 0.0, yaw.cos())
+                })
+                .normalize_or(glam::DVec3::Z);
+            let side = glam::DVec3::new(-ahead.z, 0.0, ahead.x);
+            let at = glam::DVec3::from_array(feet) + (-ahead * behind + glam::DVec3::Y * up + side * right) / 36.0;
+            let yaw = ((-ahead.x).atan2(ahead.z).to_degrees() + turn) as f32;
+            dragon.stage(Some((at, yaw, pitch as f32, flap as f32)));
         }
         if dragon.started() {
             let player = alive.then(|| glam::DVec3::from_array(feet));
@@ -1830,6 +1880,30 @@ fn set_block(
             entities.placed(&world.scene, pos);
         } else {
             entities.broke(&world.scene, &[pos]);
+        }
+    }
+}
+
+/// `set_block` for many positions of one block, rebuilt together.
+fn set_blocks(
+    world: &mut Loaded,
+    mut entities: Option<&mut crate::minecraft_entities::Entities>,
+    shapes: &mut HashMap<BlockStateId, u16>,
+    shape_ids: &mut HashMap<Vec<[u32; 6]>, u16>,
+    positions: &[(i32, i32, i32)],
+    block: &minecraft_terrain::scene::Block,
+) {
+    let state = world.stream.states.state_of(block);
+    let shape = shape_of(state, &world.registries, shapes, shape_ids);
+    for &pos in positions {
+        world.scene.set(pos, Some(block.clone()));
+        sim::voxel::set_block_shape(pos.0, pos.1, pos.2, shape);
+    }
+    world.stream.record_edits(&world.scene, positions);
+    world.stream.mark_edited(&world.scene, positions);
+    if let Some(entities) = entities.as_deref_mut() {
+        for &pos in positions {
+            entities.placed(&world.scene, pos);
         }
     }
 }

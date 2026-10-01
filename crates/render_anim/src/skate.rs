@@ -313,7 +313,14 @@ fn update(
             .and_then(|e| gamepads.get(e).ok())
             .or_else(|| gamepads.iter().next());
         let typing = mode.input_blocked;
-        skate_host::bridge::set_virtual_pad(Some(virtual_pad(&keys, pad, typing)));
+        let pad_state = match mode.script_pad {
+            Some(script) => {
+                let axis = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0) as i16;
+                (script.buttons, script.triggers, script.left.map(axis), script.right.map(axis))
+            }
+            None => virtual_pad(&keys, pad, typing),
+        };
+        skate_host::bridge::set_virtual_pad(Some(pad_state));
     }
     #[cfg(windows)]
     let _ = (&keys, &gamepads, &active_pad);
@@ -389,7 +396,20 @@ fn update(
                 present(&mut mode, p, authority);
                 diag::info!(World, "Skate activation from retained session: {ms}ms");
             }
-            Reply::Pose(epoch, p) if epoch == host.epoch && mode.active => {
+            Reply::Pose(epoch, p) if epoch == host.epoch && mode.active && !mode.frozen => {
+                if let Some(after) = mode.freeze_air {
+                    if p.state.contains("Air") {
+                        let start = *mode.air_start.get_or_insert(p.tick);
+                        if p.tick >= start + after {
+                            mode.frozen = true;
+                            mode.freeze_air = None;
+                            mode.air_start = None;
+                            diag::info!(World, "Skate frozen {after} ticks into the air (tick {})", p.tick);
+                        }
+                    } else {
+                        mode.air_start = None;
+                    }
+                }
                 if p.tick / 120 != host.logged_tick / 120 {
                     diag::info!(
                         World,
@@ -416,6 +436,7 @@ fn update(
             _ => {}
         }
     }
+    photo_camera(&mut mode);
     if std::mem::take(&mut mode.toggle_requested) && alive {
         if mode.active || host.enter_requested || host.activating {
             stop(&mut host, &mut mode, authority);
@@ -458,6 +479,9 @@ fn update(
         return;
     }
     host.input_suspended = false;
+    if mode.frozen {
+        return;
+    }
     if let Some(send) = &host.send {
         if send
             .send(Job::Step(
@@ -471,6 +495,26 @@ fn update(
             stop(&mut host, &mut mode, authority);
         }
     }
+}
+
+/// The photo camera in Skate's camera's place: about the skater, along their
+/// way ahead as it was when the camera was placed.
+fn photo_camera(mode: &mut SkateMode) {
+    let Some(photo) = mode.photo.filter(|_| mode.active) else {
+        mode.photo_forward = None;
+        return;
+    };
+    // The board's nose, level, when the camera was placed.
+    if mode.photo_forward.is_none() {
+        let nose = mode.root.x_axis.truncate();
+        mode.photo_forward = Some(Vec3::new(nose.x, nose.y, 0.0).normalize_or(Vec3::X));
+    }
+    let forward = mode.photo_forward.unwrap_or(Vec3::X);
+    let out = Quat::from_rotation_z(photo.angle.to_radians()) * forward;
+    let board = mode.root.w_axis.truncate();
+    let eye = board + out * photo.distance + Vec3::Z * photo.up;
+    let target = board + Vec3::Z * photo.look_up;
+    mode.camera = Some((Transform::from_translation(eye).looking_at(target, Vec3::Z), photo.fov));
 }
 
 /// Keyboard (and SDL/evdev gamepad) as one XInput pad for the skate engine,

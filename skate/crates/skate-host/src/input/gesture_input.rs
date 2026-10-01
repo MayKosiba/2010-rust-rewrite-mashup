@@ -94,6 +94,9 @@ impl GestureInput {
             ag.insert("HoldPattern", 1.0);
         }
         for (name, strength) in events {
+            if std::env::var_os("IW4L_DEBUG_GESTURES").is_some() {
+                eprintln!("SKATE_GESTURE {name} strength {strength:.2} permitted {} state {physical_state} flags {flags:#x}", permitted(&name, flags, physical_state, ag));
+            }
             if permitted(&name, flags, physical_state, ag) {
                 ag.insert("Trick", 1.0);
                 ag.insert(&name, 1.0);

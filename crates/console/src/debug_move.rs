@@ -74,9 +74,19 @@ pub(crate) fn register_debug_move_commands(registry: &mut ConsoleRegistry) {
     );
     registry.register(
         crate::CommandSpec::new("dragon")
-            .usage("dragon <kill|reset> — end the Ender Dragon fight, or start it over (in the End)")
-            .arg(crate::StaticCompleter::new(["kill", "reset"])),
+            .usage("dragon <kill|reset> | dragon stage <behind> <up> <right> [flap] [pitch] [turn] | dragon unstage — end or restart the fight; or hold the dragon still behind the skater, facing their way (map units), for photos")
+            .arg(crate::StaticCompleter::new(["kill", "reset", "stage", "unstage"])),
     );
+    registry.register(crate::CommandSpec::new("skatepad").usage(
+        "skatepad <lx> <ly> <rx> <ry> [a b x y lb rb lt rt up down left right start back...] | skatepad off — hold the skate pad from a script (sticks -1..1)",
+    ));
+    registry.register(crate::CommandSpec::new("flatpad").usage(
+        "flatpad [block] [half_size] [height] — build a flat floor round you (default white_concrete, 64 out, at y 200) and stand on it",
+    ));
+    registry.register(crate::CommandSpec::new("drawgun").usage("drawgun <0|1> — hide or show the first-person gun and hands (photos)"));
+    registry.register(crate::CommandSpec::new("skatecam").usage(
+        "skatecam <angle> <distance> <up> [fov] [look_up] | skatecam off — place the skate camera round the skater (degrees from the board's nose, map units), looking at the board",
+    ));
     registry.register(
         crate::CommandSpec::new("doomboss")
             .usage("doomboss <cyberdemon|mastermind|clear> — summon one of Doom's bosses ahead of you (Freedoom), or remove them")
@@ -167,8 +177,11 @@ pub(crate) fn route_debug_move_commands(
                     Some("status") => {},
                     Some("on") => { skate.toggle_requested = !skate.active && !skate.entering; },
                     Some("off") => { skate.toggle_requested = skate.active || skate.entering; },
+                    Some("freeze") => { skate.frozen = true; },
+                    Some("unfreeze") => { skate.frozen = false; skate.freeze_air = None; },
+                    Some("freezeair") => { skate.freeze_air = Some(cmd.args.get(1).and_then(|v| v.parse().ok()).unwrap_or(20)); skate.air_start = None; },
                     None => { skate.toggle_requested = true; },
-                    _ => { echo("usage: skate [on|off|status]".into(), &mut console, &mut line); continue; }
+                    _ => { echo("usage: skate [on|off|freeze|unfreeze|status]".into(), &mut console, &mut line); continue; }
                 }
                 echo(format!("skate active={} ready={} controller={:?} tick={} {}",skate.active,skate.preloaded,skate.controller,skate.tick,skate.status),&mut console,&mut line);
             }
@@ -208,9 +221,13 @@ pub(crate) fn route_debug_move_commands(
                 _ => echo("usage: summon <mob> (on the Minecraft map)".into(), &mut console, &mut line),
             },
             "dragon" => match (cmd.args.first().map(String::as_str), minecraft.as_deref_mut()) {
-                (Some(what @ ("kill" | "reset")), Some(ui)) if ui.active => {
+                (Some(what @ ("kill" | "reset" | "unstage")), Some(ui)) if ui.active => {
                     ui.dragon_request = Some(what.to_owned());
                     echo(format!("dragon: {what}"), &mut console, &mut line);
+                }
+                (Some("stage"), Some(ui)) if ui.active && cmd.args.len() >= 4 && cmd.args[1..].iter().all(|a| a.parse::<f32>().is_ok()) => {
+                    ui.dragon_request = Some(cmd.args.join(" "));
+                    echo(format!("dragon: {}", cmd.args.join(" ")), &mut console, &mut line);
                 }
                 _ => echo("usage: dragon <kill|reset> (in the End)".into(), &mut console, &mut line),
             },
@@ -222,6 +239,73 @@ pub(crate) fn route_debug_move_commands(
                 }
                 _ => echo("usage: doomboss <cyberdemon|mastermind|clear> (on the Minecraft map)".into(), &mut console, &mut line),
             },
+
+            "skatepad" => {
+                if cmd.args.first().map(String::as_str) == Some("off") {
+                    skate.script_pad = None;
+                    echo("skatepad: off".into(), &mut console, &mut line);
+                    continue;
+                }
+                let sticks: Vec<f32> = cmd.args.iter().take(4).filter_map(|a| a.parse().ok()).collect();
+                if sticks.len() != 4 {
+                    echo("usage: skatepad <lx> <ly> <rx> <ry> [buttons...] | skatepad off".into(), &mut console, &mut line);
+                    continue;
+                }
+                let mut pad = frame::skate::ScriptPad { left: [sticks[0], sticks[1]], right: [sticks[2], sticks[3]], ..Default::default() };
+                for name in &cmd.args[4..] {
+                    match name.as_str() {
+                        "lt" => pad.triggers[0] = 255,
+                        "rt" => pad.triggers[1] = 255,
+                        other => {
+                            pad.buttons |= match other {
+                                "up" => 0x0001, "down" => 0x0002, "left" => 0x0004, "right" => 0x0008,
+                                "start" => 0x0010, "back" => 0x0020, "lb" => 0x0100, "rb" => 0x0200,
+                                "a" => 0x1000, "b" => 0x2000, "x" => 0x4000, "y" => 0x8000,
+                                _ => 0,
+                            }
+                        }
+                    }
+                }
+                skate.script_pad = Some(pad);
+            }
+            "flatpad" => match minecraft.as_deref_mut() {
+                Some(ui) if ui.active => {
+                    let block = cmd.args.first().cloned().unwrap_or_else(|| "white_concrete".into());
+                    let block = if block.contains(':') { block } else { format!("minecraft:{block}") };
+                    let half = cmd.args.get(1).and_then(|v| v.parse().ok()).unwrap_or(64).clamp(4, 160);
+                    let height = cmd.args.get(2).and_then(|v| v.parse().ok()).unwrap_or(200);
+                    echo(format!("flatpad: {block} {half} out at y {height}"), &mut console, &mut line);
+                    ui.flatpad_request = Some((block, half, height));
+                }
+                _ => echo("flatpad: only on the Minecraft map".into(), &mut console, &mut line),
+            },
+            "drawgun" => match (cmd.args.first().map(String::as_str), minecraft.as_deref_mut()) {
+                (Some(v @ ("0" | "1")), Some(ui)) => {
+                    ui.hide_gun = v == "0";
+                    echo(format!("drawgun {v}"), &mut console, &mut line);
+                }
+                _ => echo("usage: drawgun <0|1>".into(), &mut console, &mut line),
+            },
+            "skatecam" => {
+                if cmd.args.first().map(String::as_str) == Some("off") {
+                    skate.photo = None;
+                    echo("skatecam: off".into(), &mut console, &mut line);
+                    continue;
+                }
+                let v: Vec<f32> = cmd.args.iter().filter_map(|a| a.parse().ok()).collect();
+                if v.len() < 3 {
+                    echo("usage: skatecam <angle> <distance> <up> [fov] [look_up] | skatecam off".into(), &mut console, &mut line);
+                    continue;
+                }
+                skate.photo = Some(frame::skate::PhotoCamera {
+                    angle: v[0],
+                    distance: v[1],
+                    up: v[2],
+                    fov: v.get(3).copied().unwrap_or(60.0),
+                    look_up: v.get(4).copied().unwrap_or(40.0),
+                });
+                echo(format!("skatecam: {v:?}"), &mut console, &mut line);
+            }
 
             "dimension" | "mc_dimension" => {
                 let target = cmd.args.first().map(String::as_str);
@@ -911,10 +995,11 @@ fn parse_force_spawn(args: &[String]) -> Result<SpawnPick, String> {
     }
 }
 
-pub(crate) fn update_skate_overlay(mode:Res<frame::SkateMode>,mut hud:Query<(&mut Text,&mut Visibility),With<SkateHud>>) {
+pub(crate) fn update_skate_overlay(mode:Res<frame::SkateMode>,ui_draw:Option<Res<frame::UiDraw>>,mut hud:Query<(&mut Text,&mut Visibility),With<SkateHud>>) {
     for (mut text,mut visibility) in &mut hud {
         let failed = !mode.preloaded && !mode.preload_pending && !mode.status.is_empty();
-        *visibility=if mode.active || mode.entering || failed {Visibility::Visible}else{Visibility::Hidden};
+        let shown=ui_draw.as_ref().is_none_or(|d| d.0);
+        *visibility=if shown && (mode.active || mode.entering || failed) {Visibility::Visible}else{Visibility::Hidden};
         **text=if failed {format!("Skate unavailable: {}", mode.status)}
         else if mode.entering && !mode.preloaded {"Skate is finishing map preparation... | J: cancel".into()}
         else if mode.controller.is_none() {"SKATE | Connect an Xbox / XInput controller | J: return to MW2".into()}

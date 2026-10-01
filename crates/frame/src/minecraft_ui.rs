@@ -103,6 +103,11 @@ pub struct MinecraftUi {
     pub dragon_request: Option<String>,
     /// The CS2 karambit's stand-in gun is in hand: its attacks are melee.
     pub knife_held: bool,
+    /// The console's `drawgun 0`: no first-person gun or hands (photos).
+    pub hide_gun: bool,
+    /// The console's `flatpad`: a flat floor of this block, this many
+    /// blocks out each way, at this height (photos).
+    pub flatpad_request: Option<(String, i32, i32)>,
     /// A console request for Doom's bosses (`cyberdemon`, `mastermind`,
     /// `clear`).
     pub doom_request: Option<String>,

@@ -335,7 +335,7 @@ pub(crate) fn update(
     view.cs2_hand = Default::default();
     covering.covering = false;
     ui.knife_held = false;
-    let shown = view.active && ui.active && !skate.active && !puppet.active && !(ui.holding_item && !ui.empty_hand);
+    let shown = !ui.hide_gun && view.active && ui.active && !skate.active && !puppet.active && !(ui.holding_item && !ui.empty_hand);
     // Hidden a moment (the view weapon can drop out for a frame, as in a
     // melee), the clip keeps its place; dead, it starts over.
     let Some(ps) = presented.viewweapon_player(local.0).filter(|ps| shown && ps.pm_type == 0) else {

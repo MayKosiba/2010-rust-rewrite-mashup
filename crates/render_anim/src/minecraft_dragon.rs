@@ -154,6 +154,9 @@ pub(crate) struct Fight {
     ticks: u64,
     clock: f64,
     rng: u64,
+    /// Held for a photo (the console's `dragon stage`): where, facing, and
+    /// the wing beat and pitch it is held at; its fight waits meanwhile.
+    staged: Option<(DVec3, f32, f32, f32)>,
 }
 
 impl Fight {
@@ -344,10 +347,30 @@ impl Fight {
         }
     }
 
+    /// Holds the dragon at `pos` facing `yaw` (pitched, at `flap` of its
+    /// wing beat), as for a photo; `None` lets it fly on.
+    pub(crate) fn stage(&mut self, staged: Option<(DVec3, f32, f32, f32)>) {
+        self.staged = staged;
+        if let (Some((pos, yaw, pitch, flap)), Some(dragon)) = (staged, self.dragon.as_mut()) {
+            dragon.pos = pos;
+            dragon.prev = pos;
+            dragon.vel = DVec3::ZERO;
+            dragon.yaw = yaw;
+            dragon.prev_yaw = yaw;
+            dragon.pitch = pitch;
+            dragon.prev_pitch = pitch;
+            dragon.flap = flap;
+            dragon.prev_flap = flap;
+        }
+    }
+
     /// Advances the fight by `dt` seconds. `player` is the player's feet
     /// while alive; `solid` says whether a block stops a fireball.
     pub(crate) fn update(&mut self, dt: f64, player: Option<DVec3>, solid: impl Fn(BlockPos) -> bool) -> Effects {
         let mut fx = Effects::default();
+        if self.staged.is_some() {
+            return fx;
+        }
         self.clock += dt.min(0.25);
         while self.clock >= 0.05 {
             self.clock -= 0.05;
@@ -577,7 +600,7 @@ impl Fight {
             pitch: dragon.prev_pitch + (dragon.pitch - dragon.prev_pitch) * partial,
             flap: dragon.prev_flap + (dragon.flap - dragon.prev_flap) * partial,
             age,
-            jaw: if matches!(dragon.phase, Phase::Perched | Phase::Strafe) { 0.6 } else { 0.1 },
+            jaw: if self.staged.is_some() { 0.9 } else if matches!(dragon.phase, Phase::Perched | Phase::Strafe) { 0.6 } else { 0.1 },
             hurt: dragon.hurt as f32 / 10.0,
         };
         dragon_render::append_dragon(mesh, &pose, atlas);
